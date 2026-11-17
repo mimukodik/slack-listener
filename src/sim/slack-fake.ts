@@ -82,6 +82,15 @@ export interface StoredMessage {
   editMissed?: boolean;
 }
 
+function assert(condition: boolean, message: string): asserts condition {
+  if (!condition) throw new Error(`fake Slack: ${message}`);
+}
+
+function channelOf(message: SlackMessage): string {
+  assert(message.channel !== undefined, `message ${message.ts} has no channel`);
+  return message.channel;
+}
+
 export function toSlack(stored: StoredMessage): SlackMessage {
   const message: SlackMessage = {
     type: "message",
@@ -114,7 +123,7 @@ export function changedEvent(
   return {
     type: "message",
     subtype: "message_changed",
-    channel: current.channel,
+    channel: channelOf(current),
     ts,
     message: current,
     previous_message: previous,
@@ -126,7 +135,7 @@ export function deletedEvent(previous: SlackMessage, ts: string): SlackMessage {
   return {
     type: "message",
     subtype: "message_deleted",
-    channel: previous.channel,
+    channel: channelOf(previous),
     ts,
     previous_message: previous,
   };
@@ -170,7 +179,9 @@ export class SlackFake {
       if (replies.length > 0) {
         message.thread_ts = stored.ts;
         message.reply_count = replies.length;
-        message.latest_reply = replies[replies.length - 1]?.ts;
+        const latest = replies.at(-1);
+        assert(latest !== undefined, `thread ${stored.ts} lost its last reply`);
+        message.latest_reply = latest.ts;
       }
       result.push(message);
     }

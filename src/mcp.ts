@@ -39,7 +39,7 @@ export class ChannelServer {
     return this.initialized;
   }
 
-  private write(message: object): Promise<void> {
+  private async write(message: object): Promise<void> {
     return new Promise((resolve, reject) => {
       this.options.output.write(`${JSON.stringify(message)}\n`, (error) =>
         error ? reject(error) : resolve(),
@@ -102,7 +102,7 @@ export class ChannelServer {
         }),
       );
     return Effect.tryPromise({
-      try: () =>
+      try: async () =>
         this.write({
           jsonrpc: "2.0",
           method: "notifications/claude/channel",

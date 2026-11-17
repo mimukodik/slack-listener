@@ -26,9 +26,16 @@ export function msToTs(ms: number): string {
   return `${seconds}.${String(millis).padStart(3, "0")}000`;
 }
 
+function tsParts(ts: string): [seconds: string, fraction: string] {
+  const [seconds, fraction = ""] = ts.split(".");
+  if (seconds === undefined)
+    throw new Error(`slack: ts without seconds: ${ts}`);
+  return [seconds, fraction];
+}
+
 export function compareTs(a: string, b: string): number {
-  const [aSeconds, aFraction = ""] = a.split(".");
-  const [bSeconds, bFraction = ""] = b.split(".");
+  const [aSeconds, aFraction] = tsParts(a);
+  const [bSeconds, bFraction] = tsParts(b);
   if (aSeconds.length !== bSeconds.length)
     return aSeconds.length - bSeconds.length;
   if (aSeconds !== bSeconds) return aSeconds < bSeconds ? -1 : 1;

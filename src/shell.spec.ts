@@ -29,7 +29,7 @@ function server() {
   return { channel, lines, send };
 }
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+const tick = async () => new Promise((resolve) => setTimeout(resolve, 10));
 
 describe("channel server", () => {
   it("R3: declares the channel capability and never the permission relay", async () => {

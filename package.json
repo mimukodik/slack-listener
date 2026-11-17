@@ -16,7 +16,7 @@
     "start": "node src/main.ts",
     "fmt": "oxfmt --write .",
     "fmt:check": "oxfmt --check .",
-    "lint": "pnpm fmt:check && OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --type-aware --tsconfig tsconfig.json --format=unix --deny-warnings src && tsrs --noEmit -p tsconfig.json",
+    "lint": "pnpm fmt:check && OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --type-aware --tsconfig tsconfig.json --format=unix --deny-warnings src && effect-tsgo tsrs --noEmit -p tsconfig.json",
     "test": "vitest --run",
     "sim": "node src/sim/run.ts",
     "exhaustive": "node src/sim/exhaustive.ts"
@@ -25,11 +25,12 @@
     "effect": "4.1.4"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.69.0",
     "@types/node": "^26.6.6",
     "fast-check": "4.10.2",
     "oxfmt": "0.56.0",
-    "oxlint": "1.90.0",
-    "tsrs": "0.23.0-ts7.1.0-beta",
+    "oxlint": "1.93.0",
+    "tsrs": "0.25.0-ts7.1.0-beta",
     "vitest": "^4.1.12"
   },
   "engines": {
