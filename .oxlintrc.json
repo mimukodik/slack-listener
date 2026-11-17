@@ -62,6 +62,7 @@
         "src/sim/simulator.ts",
         "src/sim/slack-fake.ts",
         "src/sim/choices.ts",
+        "src/sim/runtime.ts",
         "src/sim/conformance/fixture.ts"
       ],
       "rules": {

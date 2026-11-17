@@ -27,6 +27,15 @@ A top-level post, a thread reply and an edit each reached the receiving session 
 
 [PRINCIPLES.md](PRINCIPLES.md) adopts Tiger Style and deterministic simulation testing as TigerBeetle, FoundationDB and Antithesis practise it. The aim changes: the simulator is to run the same Effect program as production and replace only the tools underneath it, not drive the core through an interpreter of its own. Three spikes showed this works with Effect 4.1.4. A seeded simulator took over Effect's scheduler, clock and randomness, and ran Effect's own HTTP client and WebSocket socket over a fake `fetch` and a fake WebSocket constructor, with hangs, network errors and crash-restarts. Every seed replayed identically, at about 0.3 ms per run, with no real timer used, and fast-check shrank a whole run's choices to a run of eleven events. Each principle states whether the code holds it today; the ones it does not are the plan.
 
+## 2026-11-17: the simulation runtime
+
+`src/sim/runtime.ts` is the runtime the whole program will run on: it gives Effect its scheduler, its clock and a seeded `Random`, and drives the world from one stream of choices. `src/sim/host.ts` is the simulator's only contact with the real host: it lets promise callbacks run between steps, and its tripwire makes any real timer during a run throw.
+
+- Learned: Effect resumes a waiting fiber directly, not through the scheduler; it uses the scheduler only when a fiber has used up its turn or a forked fiber starts. A scheduler alone therefore decides almost nothing: a probe saw one ready task at every pick. The seed now decides interleaving where it happens: timers due at the same moment become ready tasks run in a seeded order, and every turn gets a seeded budget of operations, so a busy fiber is cut off at a point the seed picks. Choice 0 keeps Effect's own behaviour, first come first run with the full budget.
+- Learned: because a fiber resumes directly, an answer to a request must be a timer of the process that asked, so a crash drops it. A world timer, one that belongs to no process, must not wake a process; a task of a crashed process stops the run.
+- Learned: Effect runs a forked program synchronously up to its first wait, so the tripwire is on before the program starts.
+- Measured: four fibers of four sleeps each, about 0.26 ms per run, no real timer. Eight planted bugs in the runtime, the host and their checks (random task order, a fixed task order, an ignored seed, a crash that keeps its timers, no stuck detection, no time limit, no tripwire, `Math.random` and `setTimeout` in the runtime) each fail a test or lint.
+
 ## Changes after the first green run
 
 | When         | What                                                                                                                                                                                  | Direction            | Cause                                                                                           |
