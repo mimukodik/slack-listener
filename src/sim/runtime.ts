@@ -32,13 +32,13 @@ type Timer = {
   readonly fire: () => void;
 };
 
-// Effect's own budget of operations per turn. Each turn the choices may cut
-// it shorter, so a busy fiber is preempted at a point the seed picks; choice
-// 0 keeps the full budget.
-const opsPerTurnMax = 64;
-
-// Tasks may schedule tasks; one step runs at most this many.
-const tasksPerStepMax = 100_000;
+// Effect's own budget of operations per turn (the default of
+// Scheduler.MaxOpsBeforeYield). Each turn the choices may halve it up to
+// eleven times, down to one operation, so a busy fiber is preempted at a
+// point the seed picks and small budgets come up often; choice 0 keeps
+// Effect's budget.
+const opsPerTurnMax = 2048;
+const halvingsMax = 11;
 
 // Process epochs start at 1; timers of the world carry 0.
 const worldEpoch = 0;
@@ -139,6 +139,8 @@ export class SimRuntime {
       Effect.provideService(Clock.Clock, this.clock()),
       Random.withSeed(this.choices.int(2 ** 31)),
     );
+    // Effect runs the first turn at once, inside runFork; seed its budget too.
+    this.opsThisTurnMax = this.turnBudget();
     const fiber = Effect.runFork(seeded, { scheduler: this.scheduler() });
     this.fiberCurrent = fiber;
     return fiber;
@@ -163,22 +165,27 @@ export class SimRuntime {
     return epoch === this.epochValue || epoch === worldEpoch;
   }
 
-  // Runs ready tasks one at a time, in an order the choices pick, each with
-  // an operation budget the choices pick. Choice 0 is first come, first run.
-  private runReady(): void {
-    for (let count = 0; this.ready.length > 0; count += 1) {
-      assert(count < tasksPerStepMax, "tasks keep scheduling tasks");
-      const size = this.ready.length;
-      const index = this.choices.int(size);
-      const [task] = this.ready.splice(index, 1);
-      assert(task !== undefined, "picked a task that is not there");
-      this.opsThisTurnMax = opsPerTurnMax - this.choices.int(opsPerTurnMax);
-      this.trace.push(`${this.nowMsValue} task ${index}/${size}`);
-      // A crash drops its tasks; one of a dead process here means something
-      // outside it, a world timer, woke it.
-      assert(this.live(task.epoch), `a task of crashed process ${task.epoch}`);
-      task.run();
-    }
+  private turnBudget(): number {
+    const budget = opsPerTurnMax >> this.choices.int(halvingsMax + 1);
+    assert(budget >= 1 && budget <= opsPerTurnMax, `bad budget ${budget}`);
+    return budget;
+  }
+
+  // Runs one ready task, picked by the choices, with an operation budget the
+  // choices pick. Choice 0 is first come, first run, with the full budget.
+  private runOne(): void {
+    const size = this.ready.length;
+    assert(size > 0, "no ready task to run");
+    const index = this.choices.int(size);
+    const [task] = this.ready.splice(index, 1);
+    assert(task !== undefined, "picked a task that is not there");
+    this.opsThisTurnMax = this.turnBudget();
+    this.trace.push(`${this.nowMsValue} task ${index}/${size}`);
+    // A crash drops its tasks; a task of a dead process here means something
+    // outside the runtime woke it: a world timer, or a promise answered on
+    // its behalf by something other than one of its own timers.
+    assert(this.live(task.epoch), `a task of crashed process ${task.epoch}`);
+    task.run();
   }
 
   // Moves time to the next due timers of the live process and the world and
@@ -203,15 +210,22 @@ export class SimRuntime {
   }
 
   // Drives the world until the process ends, nothing is left to happen
-  // (stuck: a liveness failure), or a limit is reached. settle lets promise
-  // callbacks run; it is the only thing taken from the host.
+  // (stuck: a liveness failure), or a limit is reached. A step is one task.
+  // After each task settle lets promise callbacks run, as Node drains
+  // microtasks after each macrotask, so a promise answered before a crash
+  // finishes while its process is alive. settle is the only thing taken
+  // from the host.
   async run(
     limits: Limits,
     settle: () => Promise<void>,
   ): Promise<Outcome<unknown, unknown>> {
     assert(limits.stepsMax > 0 && limits.timeMsMax > 0, "limits not positive");
     for (let steps = 0; steps < limits.stepsMax; steps += 1) {
-      this.runReady();
+      if (this.ready.length > 0) {
+        this.runOne();
+        await settle();
+        continue;
+      }
       await settle();
       if (this.ready.length > 0) continue;
       const exit = this.fiberCurrent?.pollUnsafe();
