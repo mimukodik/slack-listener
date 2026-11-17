@@ -70,9 +70,9 @@ describe("channel server", () => {
 
 describe("configuration", () => {
   const base = {
-    channel: "C0CE0EXRU2H",
-    ownPeople: ["U6W18QV6F"],
-    otherPeople: ["U01HSH4K7B9"],
+    channel: "C0WATCH001",
+    ownPeople: ["U0OWN0001"],
+    otherPeople: ["U0OTHER01"],
     tokens: {
       bot: "op://Private/slack-listener/bot_token",
       app: "op://Private/slack-listener/app_token",
@@ -81,9 +81,9 @@ describe("configuration", () => {
 
   it("reads sides and token references", () => {
     const config = parseConfig(JSON.stringify(base), "test.json");
-    expect(config.core.ownPeople).toEqual(["U6W18QV6F"]);
-    expect(config.core.otherPeople).toEqual(["U01HSH4K7B9"]);
-    expect(config.stateFile).toMatch(/C0CE0EXRU2H\.state\.json$/);
+    expect(config.core.ownPeople).toEqual(["U0OWN0001"]);
+    expect(config.core.otherPeople).toEqual(["U0OTHER01"]);
+    expect(config.stateFile).toMatch(/C0WATCH001\.state\.json$/);
   });
 
   it("R6: refuses a literal token where a 1Password reference belongs", () => {
