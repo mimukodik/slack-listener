@@ -23,6 +23,10 @@ The core is a pure `step(state, event, now)`; the shell runs its effects (Slack,
 
 A top-level post, a thread reply and an edit each reached the receiving session once, 3 to 4 s after posting, with the right `thread_ts`. Three posts by the own side's agents, one of them the receiving session's own answer, were dropped by R10.
 
+## 2026-11-17: Tiger Style and the whole program under simulation
+
+[PRINCIPLES.md](PRINCIPLES.md) adopts Tiger Style and deterministic simulation testing as TigerBeetle, FoundationDB and Antithesis practise it. The aim changes: the simulator is to run the same Effect program as production and replace only the tools underneath it, not drive the core through an interpreter of its own. Three spikes showed this works with Effect 4.1.4. A seeded simulator took over Effect's scheduler, clock and randomness, and ran Effect's own HTTP client and WebSocket socket over a fake `fetch` and a fake WebSocket constructor, with hangs, network errors and crash-restarts. Every seed replayed identically, at about 0.3 ms per run, with no real timer used, and fast-check shrank a whole run's choices to a run of eleven events. Each principle states whether the code holds it today; the ones it does not are the plan.
+
 ## Changes after the first green run
 
 | When         | What                                                                                                                                                                                  | Direction            | Cause                                                                                           |

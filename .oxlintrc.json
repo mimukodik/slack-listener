@@ -1,14 +1,47 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript"],
+  "plugins": ["typescript", "unicorn", "oxc"],
   "options": {
     "typeAware": true
   },
   "categories": {
-    "correctness": "warn"
+    "correctness": "error"
   },
   "rules": {
-    "eslint/eqeqeq": "warn",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/consistent-type-imports": "error",
+    "max-depth": [
+      "error",
+      {
+        "max": 3
+      }
+    ],
+    "max-nested-callbacks": [
+      "error",
+      {
+        "max": 3
+      }
+    ],
+    "max-params": [
+      "error",
+      {
+        "max": 5
+      }
+    ],
+    "no-param-reassign": "error",
+    "prefer-const": "error",
+    "no-else-return": "error",
+    "no-var": "error",
+    "eqeqeq": "error",
+    "no-implicit-coercion": "error",
+    "unicorn/no-accessor-recursion": "error",
     "eslint/no-unused-vars": [
       "error",
       {
@@ -19,5 +52,121 @@
       }
     ]
   },
+  "overrides": [
+    {
+      "files": [
+        "src/core.ts",
+        "src/format.ts",
+        "src/settle.ts",
+        "src/slack.ts",
+        "src/sim/simulator.ts",
+        "src/sim/slack-fake.ts",
+        "src/sim/choices.ts",
+        "src/sim/conformance/fixture.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "setTimeout",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "setInterval",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "setImmediate",
+            "message": "world-through-services: scheduling belongs to the Effect Scheduler."
+          },
+          {
+            "name": "clearTimeout",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "clearInterval",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "queueMicrotask",
+            "message": "world-through-services: scheduling belongs to the Effect Scheduler."
+          },
+          {
+            "name": "performance",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "fetch",
+            "message": "world-through-services: HTTP goes through the HttpClient service."
+          },
+          {
+            "name": "WebSocket",
+            "message": "world-through-services: sockets go through the Socket service."
+          },
+          {
+            "name": "process",
+            "message": "world-through-services: the process belongs to main.ts."
+          },
+          {
+            "name": "crypto",
+            "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Date",
+            "property": "now",
+            "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "Math",
+            "property": "random",
+            "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          },
+          {
+            "object": "globalThis",
+            "property": "setTimeout",
+            "message": "world-through-services: time comes from the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "fetch",
+            "message": "world-through-services: HTTP goes through the HttpClient service."
+          },
+          {
+            "object": "globalThis",
+            "property": "Date",
+            "message": "world-through-services: pass now in, or read the Clock service."
+          }
+        ],
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "node:*",
+                  "fs",
+                  "fs/*",
+                  "net",
+                  "child_process",
+                  "os",
+                  "http",
+                  "https",
+                  "dgram",
+                  "dns",
+                  "worker_threads",
+                  "timers",
+                  "timers/*"
+                ],
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
   "ignorePatterns": ["**/node_modules/**", "**/*.spec.ts"]
 }
