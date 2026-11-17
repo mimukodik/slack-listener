@@ -780,7 +780,7 @@ class Simulation {
   }
 }
 
-class SafetyChecker {
+export class SafetyChecker {
   private readonly counts = new Map<string, number>();
   private readonly lastInThread = new Map<string, string>();
   private lastTopLevel: string | null = null;

@@ -8,7 +8,8 @@
     "fmt:check": "oxfmt --check .",
     "lint": "pnpm fmt:check && pnpm -r lint && pnpm -r typecheck",
     "test": "pnpm -r test",
-    "sim": "pnpm --filter @muhely/slack-listener sim"
+    "sim": "pnpm --filter @muhely/slack-listener sim",
+    "exhaustive": "pnpm --filter @muhely/slack-listener exhaustive"
   },
   "devDependencies": {
     "oxfmt": "0.56.0",

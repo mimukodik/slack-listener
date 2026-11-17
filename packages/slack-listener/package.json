@@ -12,7 +12,8 @@
     "typecheck": "tsrs --noEmit -p tsconfig.json",
     "test": "vitest --run",
     "sim": "node src/sim/run.ts",
-    "start": "node src/main.ts"
+    "start": "node src/main.ts",
+    "exhaustive": "node src/sim/exhaustive.ts"
   },
   "dependencies": {
     "effect": "4.1.4"

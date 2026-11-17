@@ -28,3 +28,5 @@ jobs:
       - run: pnpm test
       - name: Simulator, 2000 seeds
         run: pnpm sim 2000 120
+      - name: Exhaustive pass, every sequence up to 7 actions
+        run: pnpm exhaustive 7
