@@ -20,6 +20,18 @@ export function parentFrom(config: CoreConfig, message: SlackMessage): Parent {
   };
 }
 
+/** R17: the parent as a reply shows it; a parent by someone not configured is never quoted. */
+export function parentInfo(parent: Parent, authorName: string): ParentInfo {
+  return parent.allowed
+    ? {
+        shown: true,
+        authorId: parent.authorId,
+        authorName,
+        line: parent.line,
+      }
+    : { shown: false };
+}
+
 export interface Enrichment {
   userName: string;
   channelName: string;

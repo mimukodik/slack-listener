@@ -21,8 +21,8 @@ import {
   type TimerName,
 } from "./core.ts";
 import {
-  firstLine,
   parentFrom,
+  parentInfo,
   renderDelivery,
   type Parent,
   type ParentInfo,
@@ -325,14 +325,11 @@ export class Shell {
     return lookup.pipe(
       Effect.flatMap((parent): Effect.Effect<ParentInfo | null> => {
         if (parent === null) return Effect.succeed(null);
-        if (!parent.allowed) return Effect.succeed({ shown: false });
-        return this.enrichName(parent.authorId).pipe(
-          Effect.map((authorName) => ({
-            shown: true,
-            authorId: parent.authorId,
-            authorName,
-            line: parent.line,
-          })),
+        const name = parent.allowed
+          ? this.enrichName(parent.authorId)
+          : Effect.succeed("");
+        return name.pipe(
+          Effect.map((authorName) => parentInfo(parent, authorName)),
         );
       }),
     );
@@ -359,11 +356,15 @@ export class Shell {
 
   private deliver(delivery: Delivery): void {
     if (!delivery.isReply && delivery.kind === "message")
-      this.parents.set(delivery.ts, {
-        allowed: true,
-        authorId: delivery.user,
-        line: firstLine(delivery.text),
-      });
+      this.parents.set(
+        delivery.ts,
+        parentFrom(this.config.core, {
+          type: "message",
+          user: delivery.user,
+          text: delivery.text,
+          ts: delivery.ts,
+        }),
+      );
     const program = Effect.all({
       userName: this.enrichName(delivery.user),
       parent: this.enrichParent(delivery),

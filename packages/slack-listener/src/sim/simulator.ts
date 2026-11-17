@@ -11,7 +11,7 @@ import {
   type StepResult,
   type TimerName,
 } from "../core.ts";
-import { parentFrom, renderDelivery } from "../format.ts";
+import { parentFrom, parentInfo, renderDelivery } from "../format.ts";
 import { compareTs, msToTs, tsToMs, type SlackMessage } from "../slack.ts";
 import { Choices } from "./choices.ts";
 import {
@@ -876,14 +876,7 @@ class SafetyChecker {
       parent:
         !delivery.isReply || parent === null
           ? null
-          : parent.allowed
-            ? {
-                shown: true,
-                authorId: parent.authorId,
-                authorName: 'Parent\u2029"name"',
-                line: parent.line,
-              }
-            : { shown: false },
+          : parentInfo(parent, 'Parent\u2029"name"'),
       permalink: null,
     });
     checkFraming(delivery, rendered.content, rendered.meta);
