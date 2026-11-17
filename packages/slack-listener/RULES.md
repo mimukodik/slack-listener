@@ -5,8 +5,7 @@ brief and Greg's additions. bob2 approves changes to this file; a change goes to
 only if it widens who can wake a session, lets the tool speak where it could not
 before, or weakens R3 or R6 (Greg, 2026-11-17, via bob2). The builder does not edit it
 without that approval. A rule that looks wrong is raised, and its replacement gets a
-new id. Ids are never
-reused; a replaced rule stays, marked replaced.
+new id. Ids are never reused; a replaced rule stays, marked replaced.
 
 The channel is where two coordinators, Greg's and eggp's, talk about the work in
 flight. Most messages are agent to agent, in both directions; a person typing is the

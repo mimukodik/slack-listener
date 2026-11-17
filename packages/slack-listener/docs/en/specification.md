@@ -86,24 +86,34 @@ The steps for creating the app are in [`slack-app.md`](slack-app.md), written so
 - **Seeded simulator:** `src/sim` runs the core against a fake Slack with faults drawn from a seed: duplicate, late and re-sent envelopes, disconnects, crashes between effects, failing API calls and a failing session. fast-check drives the choices and shrinks a failure to the shortest failing trace.
 - **What is checked, and when:** the safety rules are checked after every step, and the progress rules (R7, R8) at the end of every run. Coverage counters must all be above zero, so that the important cases really occur.
 - **Controls:** one build that delivers nothing and one that delivers everything; the checkers must fail on both, or a green run could be empty.
+- **Bounded exhaustive pass:** `src/sim/exhaustive.ts` runs every sequence of up to N actions over a tiny alphabet: two thread starters (one by the other side, one by our own agent), a reply in each, an edit, a disconnect that lasts one action, a crash at the next delivery, and a duplicate envelope. Timing is fixed; reordering and slow APIs stay with the sampler. Every prefix is checked with the simulator's checkers. Sampling can only say it found no violation; this says there is none up to the bound. CI runs 7 actions (87,796 sequences); 8 actions (470,620) runs in about 37 s. A message posted while the connection is down or the process is stopped reaches the core only through catch-up, as with real Slack.
+- **Mutation checks:** a change that adds or tightens a check is shown to fail when the code it guards is broken on purpose; the counts are in the pull request.
 - **Kept scenarios:** every bug the simulator found stays as a fixed example test in `src/core.spec.ts`.
 - **What the numbered rules are for:** they fix what we want. The builder does not rewrite them to make a test pass; a rule that looks wrong is raised, and its replacement gets a new id.
+
+### What the verdict rests on
+
+A green simulator, exhaustive pass and test suite is only as good as three things nothing checks mechanically:
+
+1. **The fake Slack.** It is our model of the outside world, and it has already been wrong once (a deleted thread parent stays as a tombstone). The conformance test (`src/sim/conformance`) compares the fake's events with events recorded from real Slack, reduced to the fields the core reads, with ids and text replaced. Recorded so far: a channel join and an agent's thread reply. A top-level post, an edit, a broadcast and a delete are listed as open until they are recorded. Every later surprise from real Slack becomes a recorded fixture first and a change to the fake second.
+2. **The rules themselves.** The checkers prove the code keeps `RULES.md`; nothing proves `RULES.md` says what we want. A check can also be passed by weakening it. Every change to the rules, the checkers or the fake after the first green run is logged with its cause in the README.
+3. **The receiving session.** The tool frames a message as quoted data; whether the model reading it treats it so is outside what any test here can show.
 
 What the method gave and what it cost is in the README: [Method and what it gave](../../README.md#method-and-what-it-gave).
 
 ## 8. What is built, and what is not yet
 
-| Part                                                | State       | Note                                                                                                                          |
-| --------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `RULES.md`                                          | done        | Updated with Greg's decisions of 2026-11-17.                                                                                  |
-| Core and message format                             | done        | Pure functions, no I/O.                                                                                                       |
-| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 33 tests pass. Now also models laptop sleep and slow, failing API calls. |
-| Shell: Socket Mode, MCP stdio, 1Password, lock file | done        | `--check` passed all three checks: bot token, reading #berek-agent-lock, Socket Mode token.                                   |
-| Greg's Slack app                                    | done        | Created from the manifest in [`slack-app.md`](slack-app.md).                                                                  |
-| Live dry run                                        | in progress | Running against a throwaway session; `bob-check` is not restarted yet.                                                        |
-| Live proof on `bob-check`                           | open        | Follows the dry run.                                                                                                          |
-| Step 2: the `reply` tool                            | planned     | Switches on once step 1 has its live proof (D4).                                                                              |
-| PR #1                                               | merged      | The first independent review found three blocking problems; all fixed, accepted on the second round, CI green.                |
+| Part                                                | State       | Note                                                                                                                                                            |
+| --------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RULES.md`                                          | done        | Updated with Greg's decisions of 2026-11-17.                                                                                                                    |
+| Core and message format                             | done        | Pure functions, no I/O.                                                                                                                                         |
+| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 36 tests pass, 4 open (unrecorded Slack events). Now also models laptop sleep and slow, failing API calls. |
+| Shell: Socket Mode, MCP stdio, 1Password, lock file | done        | `--check` passed all three checks: bot token, reading #berek-agent-lock, Socket Mode token.                                                                     |
+| Greg's Slack app                                    | done        | Created from the manifest in [`slack-app.md`](slack-app.md).                                                                                                    |
+| Live dry run                                        | in progress | Running against a throwaway session; `bob-check` is not restarted yet.                                                                                          |
+| Live proof on `bob-check`                           | open        | Follows the dry run.                                                                                                                                            |
+| Step 2: the `reply` tool                            | planned     | Switches on once step 1 has its live proof (D4).                                                                                                                |
+| PR #1                                               | merged      | The first independent review found three blocking problems; all fixed, accepted on the second round, CI green.                                                  |
 
 ## 9. Decisions
 

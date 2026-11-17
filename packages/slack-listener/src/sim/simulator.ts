@@ -11,7 +11,7 @@ import {
   type StepResult,
   type TimerName,
 } from "../core.ts";
-import { parentFrom, renderDelivery } from "../format.ts";
+import { parentFrom, parentInfo, renderDelivery } from "../format.ts";
 import { compareTs, msToTs, tsToMs, type SlackMessage } from "../slack.ts";
 import { Choices } from "./choices.ts";
 import {
@@ -21,6 +21,8 @@ import {
   otherChannel,
   people,
   SlackFake,
+  changedEvent,
+  deletedEvent,
   toSlack,
   watchedChannel,
   type AuthorLabel,
@@ -488,12 +490,19 @@ class Simulation {
     if (stored?.broadcast) this.coverage.broadcastsDelivered += 1;
   }
 
+  private markMissedEdit(message: SlackMessage): void {
+    if (message.subtype !== "message_changed") return;
+    const target = this.slack.messages.get(message.message?.ts ?? "");
+    if (target !== undefined) target.editMissed = true;
+  }
+
   private helloAt(connection: number): void {
     for (const envelope of this.envelopes.values()) {
       if (envelope.sentOn !== null) continue;
       envelope.attempts += 1;
       if (envelope.attempts > 4) {
         this.envelopes.delete(envelope.id);
+        this.markMissedEdit(envelope.message);
         continue;
       }
       if (envelope.attempts > 1) this.coverage.retriedEnvelopes += 1;
@@ -686,15 +695,11 @@ class Simulation {
       this.coverage.sameTextEdits += 1;
       target.editedTs = this.slack.nextTs(this.now);
     }
-    const current = toSlack(target);
-    this.emit({
-      type: "message",
-      subtype: "message_changed",
-      channel: target.channel,
-      ts: this.slack.nextTs(this.now),
-      message: current,
-      previous_message: previous,
-    });
+    if (!this.socketOpen || this.connection === this.deadConnection)
+      target.editMissed = true;
+    this.emit(
+      changedEvent(previous, toSlack(target), this.slack.nextTs(this.now)),
+    );
   }
 
   private remove(): void {
@@ -702,13 +707,7 @@ class Simulation {
     if (candidates.length === 0) return;
     const target = this.choices.pick(candidates);
     target.deleted = true;
-    this.emit({
-      type: "message",
-      subtype: "message_deleted",
-      channel: target.channel,
-      ts: this.slack.nextTs(this.now),
-      previous_message: toSlack(target),
-    });
+    this.emit(deletedEvent(toSlack(target), this.slack.nextTs(this.now)));
   }
 
   private postElsewhere(): void {
@@ -780,7 +779,7 @@ class Simulation {
   }
 }
 
-class SafetyChecker {
+export class SafetyChecker {
   private readonly counts = new Map<string, number>();
   private readonly lastInThread = new Map<string, string>();
   private lastTopLevel: string | null = null;
@@ -876,14 +875,7 @@ class SafetyChecker {
       parent:
         !delivery.isReply || parent === null
           ? null
-          : parent.allowed
-            ? {
-                shown: true,
-                authorId: parent.authorId,
-                authorName: 'Parent\u2029"name"',
-                line: parent.line,
-              }
-            : { shown: false },
+          : parentInfo(parent, 'Parent\u2029"name"'),
       permalink: null,
     });
     checkFraming(delivery, rendered.content, rendered.meta);
@@ -976,7 +968,7 @@ export function checkProgress(
     if (seen === undefined)
       return `R7: ${stored.ts} by ${stored.author.label} was never delivered`;
     const replyEditInvisibleToHistory =
-      slack.inThread(stored) && !stored.broadcast;
+      slack.inThread(stored) && !stored.broadcast && stored.editMissed === true;
     if (seen !== stored.text && !replyEditInvisibleToHistory) {
       return `R7: ${stored.ts} was delivered as "${seen}", Slack now says "${stored.text}"`;
     }

@@ -78,6 +78,8 @@ export interface StoredMessage {
   editedTs: string | undefined;
   deleted: boolean;
   noise: boolean;
+  /** An edit Slack never pushed to a live connection (RULES.md, out of scope for replies). */
+  editMissed?: boolean;
 }
 
 export function toSlack(stored: StoredMessage): SlackMessage {
@@ -101,6 +103,33 @@ export function toSlack(stored: StoredMessage): SlackMessage {
       message.edited.user = stored.author.user;
   }
   return message;
+}
+
+/** The event Slack sends when a message's text changes. */
+export function changedEvent(
+  previous: SlackMessage,
+  current: SlackMessage,
+  ts: string,
+): SlackMessage {
+  return {
+    type: "message",
+    subtype: "message_changed",
+    channel: current.channel,
+    ts,
+    message: current,
+    previous_message: previous,
+  };
+}
+
+/** The event Slack sends when a message is deleted. */
+export function deletedEvent(previous: SlackMessage, ts: string): SlackMessage {
+  return {
+    type: "message",
+    subtype: "message_deleted",
+    channel: previous.channel,
+    ts,
+    previous_message: previous,
+  };
 }
 
 function tombstone(stored: StoredMessage): SlackMessage {

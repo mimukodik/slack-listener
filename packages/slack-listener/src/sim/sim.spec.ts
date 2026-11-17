@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import { step } from "../core.ts";
+import { runExhaustive } from "./exhaustive.ts";
 import { runSimulation, type StepFn } from "./simulator.ts";
 
 describe("simulator", () => {
@@ -78,5 +79,15 @@ describe("two controls on the checks", () => {
     expect(
       failures.every((f) => f !== null && f.startsWith("SafetyViolation")),
     ).toBe(true);
+  });
+});
+
+describe("bounded exhaustive pass", () => {
+  it("R2 R7 R10 R17: no violation in any sequence of up to 5 actions", () => {
+    const result = runExhaustive(5);
+    expect(result.violations).toEqual([]);
+    expect(result.sequences).toBe(3068);
+    for (const [name, count] of Object.entries(result.coverage))
+      expect(count, name).toBeGreaterThan(0);
   });
 });
