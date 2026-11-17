@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  configuredAuthor,
   initialState,
   step,
   type CoreEffect,
@@ -9,7 +10,7 @@ import {
   type Saved,
   type State,
 } from "./core.ts";
-import { renderDelivery } from "./format.ts";
+import { parentFrom, renderDelivery } from "./format.ts";
 import { simConfig, simStartMs } from "./sim/simulator.ts";
 import { people, watchedChannel } from "./sim/slack-fake.ts";
 import type { SlackMessage } from "./slack.ts";
@@ -288,7 +289,7 @@ describe("R7 and R8: reconnect and catch up", () => {
   });
 });
 
-describe("R3 and R16: the delivery a session sees", () => {
+describe("R3 and R17: the delivery a session sees", () => {
   it("frames the text as quoted data and carries what is needed to answer in the thread", () => {
     const d = driver();
     d.connect();
@@ -468,7 +469,7 @@ describe("found by the independent review, 2026-11-17", () => {
     expect(d.deliveries.map((x) => x.ts)).toEqual([missed.ts]);
   });
 
-  it("R10 and R16: a thread started by someone outside the configured people is named, never quoted", () => {
+  it("R10 and R17: a thread started by someone outside the configured people is named, never quoted", () => {
     const d = driver();
     d.connect();
     d.envelope(post(10, people.other, { thread_ts: ts(1) }), d.now + 10_000);
@@ -511,5 +512,46 @@ describe("found by the independent review, 2026-11-17", () => {
       true,
     );
     expect(rendered.meta.user_name).not.toMatch(/\n/);
+  });
+});
+
+describe("R17: whose thread parent is quoted", () => {
+  it("quotes any configured author of either side, typed or agent, and never a stranger", () => {
+    const config = simConfig();
+    expect(configuredAuthor(config, post(1, people.own))).toBe(true);
+    expect(
+      configuredAuthor(config, post(1, people.own, { app_id: "ACLAUDE01" })),
+    ).toBe(true);
+    expect(configuredAuthor(config, post(1, people.other))).toBe(true);
+    expect(
+      configuredAuthor(config, post(1, people.otherBot, { bot_id: "BX" })),
+    ).toBe(true);
+    expect(configuredAuthor(config, post(1, people.stranger))).toBe(false);
+    expect(
+      configuredAuthor(config, {
+        ...post(1, "UNKNOWNBOT"),
+        subtype: "bot_message",
+        bot_id: "BX",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("R17: the parent a reply carries", () => {
+  it("is shown for our own agent's thread and hidden for a stranger's", () => {
+    const config = simConfig();
+    const own = parentFrom(
+      config,
+      post(1, people.own, {
+        app_id: "ACLAUDE01",
+        text: "\n\nstatus line\nmore",
+      }),
+    );
+    expect(own).toEqual({
+      allowed: true,
+      authorId: people.own,
+      line: "status line",
+    });
+    expect(parentFrom(config, post(1, people.stranger)).allowed).toBe(false);
   });
 });

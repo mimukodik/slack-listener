@@ -69,7 +69,8 @@ engedélykérést nem továbbít.
 A mag egy tiszta `step(state, event, now)` függvény. A héj futtatja a hatásokat:
 Slack, időzítők, a session, az állapotfájl. Az `src/sim` egy hamis Slack ellen
 futtatja a magot, seedelt hibákkal. A fast-check választja a lépéseket, és
-lerövidíti a hibás futást. Minden lépés után minden szabályt ellenőriz. Két
+lerövidíti a hibás futást. A biztonsági szabályokat minden lépés után, a haladási
+szabályokat minden futás végén ellenőrzi. Két
 kontrollnak el kell buknia: egy buildnek, amely semmit sem kézbesít, és egynek,
 amely mindent.
 

@@ -183,6 +183,20 @@ export function senderAllowed(
   return false;
 }
 
+export function configuredAuthor(
+  config: CoreConfig,
+  message: SlackMessage,
+): boolean {
+  const user = message.user;
+  if (user === undefined) return false;
+  return [
+    ...config.ownPeople,
+    ...config.otherPeople,
+    ...config.ownBots,
+    ...config.otherBots,
+  ].includes(user);
+}
+
 const deliverableSubtypes = new Set<string | undefined>([
   undefined,
   "thread_broadcast",

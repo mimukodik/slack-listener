@@ -66,7 +66,8 @@ whoever started it, and it relays no permission prompts.
 The core is a pure `step(state, event, now)`; the shell runs its effects (Slack,
 timers, the session, the state file). `src/sim` runs the core against a fake
 Slack with seeded faults, fast-check drives the choices and shrinks failures,
-every rule is checked after every step, and two controls (a build that delivers
+the safety rules are checked after every step and the progress rules at the end
+of each run, and two controls (a build that delivers
 nothing, a build that delivers everything) must fail.
 
 - Gave: four real core bugs found before any live run, each now a kept scenario

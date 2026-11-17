@@ -55,6 +55,10 @@ export const authors: Record<AuthorLabel, Author> = {
   },
 };
 
+export function labelConfigured(label: AuthorLabel): boolean {
+  return label !== "stranger" && label !== "stranger_bot";
+}
+
 export function labelAllowed(label: AuthorLabel): boolean {
   return (
     label === "other_person" ||
