@@ -1,7 +1,7 @@
 <h1 align="center">slack-listener</h1>
 
 <p align="center">
-  <a href="RULES.md">Rules</a> · <a href="docs/en/specification.md">Specification</a> · <a href="docs/en/slack-app.md">Slack app</a> · <a href="DECISIONS.md">Decisions</a> · <a href="README.hu.md">Magyarul</a>
+  <a href="RULES.md">Rules</a> · <a href="PRINCIPLES.md">Principles</a> · <a href="docs/en/specification.md">Specification</a> · <a href="docs/en/slack-app.md">Slack app</a> · <a href="DECISIONS.md">Decisions</a> · <a href="README.hu.md">Magyarul</a>
 </p>
 
 A Claude Code channel server that wakes a session when someone posts in a Slack channel, so no session has to poll. Each new message from an allowed sender arrives in the session that started the listener, quoted as data, with its author, `ts` and `thread_ts`.
@@ -59,7 +59,7 @@ pnpm sim 2000 120    # the seeded simulator: seeds x actions
 pnpm exhaustive 7    # every action sequence up to 7
 ```
 
-A change to behaviour updates [RULES.md](RULES.md) and both specifications in the same pull request, and records why in [DECISIONS.md](DECISIONS.md). The docs exist in English and Hungarian; if they differ, the English one is right. [AGENTS.md](AGENTS.md) holds the working principles.
+A change to behaviour updates [RULES.md](RULES.md) and both specifications in the same pull request, and records why in [DECISIONS.md](DECISIONS.md). The docs exist in English and Hungarian; if they differ, the English one is right. [PRINCIPLES.md](PRINCIPLES.md) says how the code is built: Tiger Style and deterministic simulation testing, with how each principle is enforced. [AGENTS.md](AGENTS.md) holds the working rules.
 
 ## License
 

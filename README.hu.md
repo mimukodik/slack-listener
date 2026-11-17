@@ -1,7 +1,7 @@
 <h1 align="center">slack-listener</h1>
 
 <p align="center">
-  <a href="RULES.md">Szabályok</a> · <a href="docs/hu/specifikacio.md">Specifikáció</a> · <a href="docs/hu/slack-app.md">Slack-app</a> · <a href="DECISIONS.md">Döntések</a> · <a href="README.md">English</a>
+  <a href="RULES.md">Szabályok</a> · <a href="PRINCIPLES.md">Elvek</a> · <a href="docs/hu/specifikacio.md">Specifikáció</a> · <a href="docs/hu/slack-app.md">Slack-app</a> · <a href="DECISIONS.md">Döntések</a> · <a href="README.md">English</a>
 </p>
 
 Claude Code channel-szerver, amely felébreszt egy munkamenetet, amikor valaki ír egy Slack-csatornába, így egyetlen munkamenetnek sem kell időzítve olvasnia. Egy engedélyezett küldő minden új üzenete abba a munkamenetbe érkezik, amelyik a figyelőt elindította, idézett adatként, a szerzőjével, a `ts`-sel és a `thread_ts`-sel.
@@ -59,7 +59,7 @@ pnpm sim 2000 120    # a seedelt szimulátor: seedek x lépések
 pnpm exhaustive 7    # minden lépéssorozat 7-ig
 ```
 
-A viselkedés változása ugyanabban a pull requestben frissíti a [RULES.md](RULES.md)-t és mindkét specifikációt, az okát pedig a [DECISIONS.md](DECISIONS.md)-be írja. A dokumentáció angolul és magyarul is megvan; ha eltérnek, az angol a helyes. A munka elveit az [AGENTS.md](AGENTS.md) tartja.
+A viselkedés változása ugyanabban a pull requestben frissíti a [RULES.md](RULES.md)-t és mindkét specifikációt, az okát pedig a [DECISIONS.md](DECISIONS.md)-be írja. A dokumentáció angolul és magyarul is megvan; ha eltérnek, az angol a helyes. A [PRINCIPLES.md](PRINCIPLES.md) leírja, hogyan épül a kód: Tiger Style és determinisztikus szimulációs tesztelés, és hogy melyik elvet mi kényszeríti ki. A munka szabályait az [AGENTS.md](AGENTS.md) tartja.
 
 ## Licenc
 
