@@ -48,7 +48,7 @@ The rule texts are in [`RULES.md`](../../RULES.md); this section only says when 
 | R11  | step 2   | a post says who wrote it                                                                            |
 | R12  | step 2   | agent loops stop                                                                                    |
 | R13  | step 2   | an acknowledgement is not answered                                                                  |
-| R14  | removed  | was: a limit on new threads per hour (D2)                                                           |
+| R14  | removed  | was: a limit on new threads per hour (see [`DECISIONS.md`](../../DECISIONS.md))                     |
 | R15  | step 2   | a post is made exactly once                                                                         |
 
 R2 has one exception: if the tool crashes between writing a delivery and saving that it did, it sends the same message again after the restart, marked `possible_duplicate`. Exactly-once delivery is not possible here, because the session does not confirm what it received.
@@ -73,7 +73,7 @@ Both instances wake on every message from the other side. Stopping does not rely
 
 - **R12, loop detector:** not a rate limit; it never slows a conversation. It stops only a thread where two agents answered each other 20 times without a person, and it says so in one line in the thread. Once a person writes there, the thread is open again. The 20 is a configuration value (`agentRunCap`), not a number in the code. Two posts arriving at exactly the same moment at the limit can exceed it by one.
 - **R13, "no reply needed":** a message marked this way arrives as information, and the tool refuses an agent reply to it until a later message in the thread asks for a reply again.
-- **R14, removed:** there is no limit on new threads per hour and no hourly total (D2).
+- **R14, removed:** there is no limit on new threads per hour and no hourly total (see [`DECISIONS.md`](../../DECISIONS.md)).
 
 ## 6. The Slack app
 

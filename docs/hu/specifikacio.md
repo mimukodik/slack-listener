@@ -48,7 +48,7 @@ A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, 
 | R11     | 2. lépés   | a poszt megmondja, ki írta                                                                          |
 | R12     | 2. lépés   | az ágensek hurka megáll                                                                             |
 | R13     | 2. lépés   | a nyugtázásra nem válaszolunk                                                                       |
-| R14     | törölve    | volt: óránkénti szálkorlát (D2)                                                                     |
+| R14     | törölve    | volt: óránkénti szálkorlát (lásd [`DECISIONS.md`](../../DECISIONS.md))                              |
 | R15     | 2. lépés   | egy poszt pontosan egyszer jelenik meg                                                              |
 
 R2 alól egy kivétel van: ha az eszköz épp a kézbesítés és annak elmentése között omlik össze, újraindulás után ugyanazt az üzenetet még egyszer elküldi, `possible_duplicate` jelöléssel. Pontosan egyszeri kézbesítés itt nem lehetséges, mert a munkamenet nem igazolja vissza, mit kapott meg.
@@ -73,7 +73,7 @@ Mindkét példány minden, a másik oldalról jövő üzenetre felébred. A leá
 
 - **R12, hurokérzékelő:** nem sebességkorlát, beszélgetést sosem lassít. Csak azt a szálat állítja meg, ahol két ágens 20-szor válaszolt egymásnak ember nélkül, és ezt egy sorban jelzi a szálban. Ember írása után a szál újra nyitva van. A 20 beállítás (`agentRunCap`), nem kódba égetett szám. Két pontosan egyszerre érkező poszt a határon eggyel túllépheti.
 - **R13, „nem kell válasz”:** az így jelölt üzenet tájékoztatásként érkezik, és az eszköz nem enged rá ágensválaszt, amíg a szálban egy későbbi üzenet újra választ nem kér.
-- **R14, törölve:** nincs óránkénti szálkorlát és óránkénti összkorlát sem (D2).
+- **R14, törölve:** nincs óránkénti szálkorlát és óránkénti összkorlát sem (lásd [`DECISIONS.md`](../../DECISIONS.md)).
 
 ## 6. A Slack-app
 

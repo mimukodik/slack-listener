@@ -309,7 +309,7 @@ describe("R3 and R17: the delivery a session sees", () => {
         shown: true,
         authorId: people.own,
         authorName: "Own Person",
-        line: "Bob, egy fájlról kérdezném",
+        line: "Sam, a question about one file",
       },
       permalink: "https://example.slack.com/archives/C1/p1",
     });
@@ -323,7 +323,7 @@ describe("R3 and R17: the delivery a session sees", () => {
       is_reply: "yes",
       user: people.other,
       user_name: "Other Person",
-      parent: "Bob, egy fájlról kérdezném",
+      parent: "Sam, a question about one file",
     });
     for (const key of Object.keys(rendered.meta))
       expect(key).toMatch(/^[A-Za-z0-9_]+$/);
