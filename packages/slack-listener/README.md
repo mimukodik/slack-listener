@@ -28,12 +28,15 @@ only typed posts are delivered: a post carrying an app id is treated as an agent
        display_name: slack-listener
    oauth_config:
      scopes:
-       bot: [groups:history, channels:history, users:read]
+       bot: [groups:history, channels:history, users:read, chat:write]
    settings:
      event_subscriptions:
        bot_events: [message.groups, message.channels]
      socket_mode_enabled: true
    ```
+
+   `chat:write` is there so the app is created once; the tool does not post until
+   step 2 is switched on in the configuration (RULES.md).
 
    Install it, create an app-level token with `connections:write`, and invite the
    bot to the channel (`/invite @slack-listener`). Each instance needs its own app:
@@ -49,8 +52,8 @@ only typed posts are delivered: a post carrying an app id is treated as an agent
      "otherPeople": ["U0000000002"],
      "otherBots": [],
      "tokens": {
-       "bot": "op://<vault>/slack-listener/bot_token",
-       "app": "op://<vault>/slack-listener/app_token"
+       "bot": "op://<vault>/<item>/bot_token",
+       "app": "op://<vault>/<item>/app_token"
      }
    }
    ```

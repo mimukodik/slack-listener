@@ -72,25 +72,27 @@ exception.
 
 ## Step 2: answering through the tool
 
-Posting stays off until Greg has seen these rules. Switching it on means adding
-`chat:write` to the app and `posting: true` to the configuration.
+Posting goes on once step 1 has its live proof and the two-instance settling
+simulation passes with R12 and R13. The app carries `chat:write` from the start;
+posting stays off until `posting: true` is set in the configuration.
 
 - **R11. A post says who wrote it.** Every post goes out as the own side's bot, in the
   watched channel only. It ends with one line naming the agent, the person it acts
   for, and that the person did not review it. A reply sits in the thread it answers.
-- **R12. Agents settle.** In one thread, after N agent posts in a row from either side
-  with no typed post between them, neither instance posts there again until a person
-  types in that thread. The tool refuses the post, says so to its session, and marks
-  deliveries in that thread `needs_human`. Both instances count the same visible
-  thread, so both stop. Two posts made at the same moment at the limit can exceed it
-  by one. N is a configuration value (`agentRunCap`), not a number in the code; the
-  proposed default is a fuse of 20, still Greg's to confirm.
+- **R12. Agent loops stop.** A loop detector, not a rate limit: it never slows a
+  conversation. In one thread, after 20 agent posts in a row from either side with no
+  typed post between them, neither instance posts there again until a person types in
+  that thread. The tool refuses the post, says so to its session, posts one line in the
+  thread saying it stopped and why, and marks later deliveries there `needs_human`.
+  Both instances count the same visible thread, so both stop. Two posts made at the
+  same moment at the limit can exceed it by one. The 20 is a configuration value
+  (`agentRunCap`), not a number in the code.
 - **R13. An acknowledgement is not answered.** A post can be marked "no reply needed".
   It is delivered as information, and the tool refuses an agent reply to it. Only a
   later message in that thread that asks for a reply opens it again.
-- **R14. New threads are rationed.** An instance's agent starts at most 6 new threads
-  an hour; answers go into existing threads. Proposed for Greg: drop this rule, or fold
-  it into one high hourly total of posts.
+- **R14. Removed 2026-11-17.** It rationed new threads per hour. Greg: limiting the
+  rate of communication is not the right lever; R12 stops loops instead. The id is not
+  reused.
 - **R15. A post is made once.** A reply the tool accepted appears in the thread
   exactly once. When Slack's answer is lost, the tool checks the thread before trying
   again, and reports a post it cannot confirm as unconfirmed, never as sent.
