@@ -85,7 +85,7 @@ async function check(config: ListenerConfig, api: SlackApi): Promise<number> {
     Effect.all(
       {
         auth: Effect.result(api.teamUrl()),
-        channel: Effect.result(api.channelInfo(config.core.channel)),
+        channel: Effect.result(api.canRead(config.core.channel)),
         socket: Effect.result(api.openConnection()),
       },
       { concurrency: 3 },
@@ -103,21 +103,16 @@ async function check(config: ListenerConfig, api: SlackApi): Promise<number> {
       ? results.auth.success
       : results.auth.failure.reason,
   );
-  if (results.channel._tag === "Success") {
-    report(
-      `channel ${config.core.channel}`,
-      results.channel.success.isMember,
-      results.channel.success.isMember
-        ? `#${results.channel.success.name}, bot is a member`
-        : `#${results.channel.success.name}, bot is NOT a member: /invite it`,
-    );
-  } else {
-    report(
-      `channel ${config.core.channel}`,
-      false,
-      `${results.channel.failure.reason} (is the bot invited?)`,
-    );
-  }
+  report(
+    `channel ${config.core.channel} (#${config.channelName})`,
+    results.channel._tag === "Success",
+    results.channel._tag === "Success"
+      ? "bot can read its history"
+      : results.channel.failure.reason === "not_in_channel" ||
+          results.channel.failure.reason === "channel_not_found"
+        ? `${results.channel.failure.reason}: /invite the bot in the channel`
+        : results.channel.failure.reason,
+  );
   report(
     "app token (apps.connections.open)",
     results.socket._tag === "Success",

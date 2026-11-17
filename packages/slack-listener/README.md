@@ -22,24 +22,31 @@ only typed posts are delivered: a post carrying an app id is treated as an agent
 
    ```yaml
    display_information:
-     name: slack-listener (your name)
+     name: slack-listener-<your name>
    features:
      bot_user:
-       display_name: slack-listener
+       display_name: slack-listener-<your name>
+       always_online: false
    oauth_config:
      scopes:
-       bot: [groups:history, channels:history, users:read, chat:write]
+       bot: [groups:history, users:read, chat:write]
    settings:
      event_subscriptions:
-       bot_events: [message.groups, message.channels]
+       bot_events: [message.groups]
+     interactivity:
+       is_enabled: false
      socket_mode_enabled: true
+     token_rotation_enabled: false
    ```
 
+   `groups:history` reads the private channel, `users:read` turns user ids into
+   names, `message.groups` delivers new messages over Socket Mode. For a public
+   channel use `channels:history` and `message.channels` instead.
    `chat:write` is there so the app is created once; the tool does not post until
    step 2 is switched on in the configuration (RULES.md).
 
-   Install it, create an app-level token with `connections:write`, and invite the
-   bot to the channel (`/invite @slack-listener`). Each instance needs its own app:
+   Install it, create an app-level token named "socket" with `connections:write`, and invite the
+   bot to the channel (`/invite @slack-listener-<your name>`). Each instance needs its own app:
    Slack spreads one app's events across all its open connections.
 
 2. Put both tokens in 1Password and write `~/.config/slack-listener/config.json`:

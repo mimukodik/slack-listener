@@ -182,18 +182,10 @@ export class SlackApi {
     );
   }
 
-  channelInfo(
-    channel: string,
-  ): Effect.Effect<{ name: string; isMember: boolean }, SlackApiError> {
-    return this.call<
-      SlackResponse & { channel?: { name?: string; is_member?: boolean } }
-    >("conversations.info", {
+  canRead(channel: string): Effect.Effect<void, SlackApiError> {
+    return this.call<SlackResponse>("conversations.history", {
       channel,
-    }).pipe(
-      Effect.map((body) => ({
-        name: body.channel?.name ?? channel,
-        isMember: body.channel?.is_member === true,
-      })),
-    );
+      limit: "1",
+    }).pipe(Effect.asVoid);
   }
 }
