@@ -21,6 +21,8 @@ import {
   otherChannel,
   people,
   SlackFake,
+  changedEvent,
+  deletedEvent,
   toSlack,
   watchedChannel,
   type AuthorLabel,
@@ -686,15 +688,9 @@ class Simulation {
       this.coverage.sameTextEdits += 1;
       target.editedTs = this.slack.nextTs(this.now);
     }
-    const current = toSlack(target);
-    this.emit({
-      type: "message",
-      subtype: "message_changed",
-      channel: target.channel,
-      ts: this.slack.nextTs(this.now),
-      message: current,
-      previous_message: previous,
-    });
+    this.emit(
+      changedEvent(previous, toSlack(target), this.slack.nextTs(this.now)),
+    );
   }
 
   private remove(): void {
@@ -702,13 +698,7 @@ class Simulation {
     if (candidates.length === 0) return;
     const target = this.choices.pick(candidates);
     target.deleted = true;
-    this.emit({
-      type: "message",
-      subtype: "message_deleted",
-      channel: target.channel,
-      ts: this.slack.nextTs(this.now),
-      previous_message: toSlack(target),
-    });
+    this.emit(deletedEvent(toSlack(target), this.slack.nextTs(this.now)));
   }
 
   private postElsewhere(): void {

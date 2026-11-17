@@ -86,24 +86,34 @@ Az app létrehozásának lépései a [`slack-app.md`](slack-app.md)-ben vannak, 
 - **Magolt szimulátor:** a `src/sim` a magot egy hamis Slack ellen futtatja, beállított magból (seed) származó hibákkal: duplikált, késő és újraküldött esemény, szakadás, összeomlás két effekt között, hibázó API-hívás és munkamenet. A döntéseket a fast-check hajtja, és hiba esetén a legrövidebb hibás sorozatra szűkít.
 - **Mit és mikor ellenőrzünk:** a biztonsági szabályokat minden lépés után, a haladási szabályokat (R7, R8) minden futás végén ellenőrizzük. A lefedettség-számlálóknak mind nullánál nagyobbnak kell lenniük, hogy a fontos esetek tényleg előforduljanak.
 - **Kontrollok:** egy változat, amely semmit sem kézbesít, és egy, amely mindent; mindkettőn el kell buknia az ellenőrzőknek, különben egy zöld futás üres lehet.
+- **Korlátos teljes bejárás:** az `src/sim/exhaustive.ts` minden legfeljebb N lépéses sorozatot lefuttat egy apró ábécén: két szálnyitó (egyik a másik oldalé, másik a saját ágensünké), egy-egy válasz mindkettőben, egy szerkesztés, egy egy lépésig tartó kapcsolatszakadás, egy összeomlás a következő kézbesítésnél és egy ismételt boríték. Az időzítés rögzített; az átrendeződést és a lassú API-t a mintavételező szimulátor fedi. Minden előtagot a szimulátor ellenőrzői vizsgálnak. A mintavétel csak annyit mondhat, hogy nem talált hibát; ez azt mondja, hogy a korlátig nincs. A CI 7 lépésig fut (92 038 sorozat); 8 lépésig (493 680) kb. 40 mp.
+- **Mutációs ellenőrzés:** ha egy változás ellenőrzést ad hozzá vagy szigorít, megmutatjuk, hogy elbukik, amikor a védett kódot szándékosan elrontjuk; a számok a pull requestben vannak.
 - **Megtartott forgatókönyvek:** minden hiba, amelyet a szimulátor talált, rögzített példatesztként marad meg a `src/core.spec.ts`-ben.
 - **A számozott szabályok szerepe:** ezek rögzítik, mit akarunk. A fejlesztő nem írja át őket, hogy átmenjen a teszt; ha egy szabály rossz, jelzi, és a helyette jövő új azonosítót kap.
+
+### Min áll az eredmény
+
+A zöld szimulátor, a teljes bejárás és a tesztek csak annyit érnek, amennyit három dolog, amit semmi nem ellenőriz gépileg:
+
+1. **A hamis Slack.** Ez a külvilág modellje, és egyszer már tévedett (a törölt szálnyitó üzenet sírkőként megmarad). A megfelelőségi teszt (`src/sim/conformance`) a hamis Slack eseményeit valódi Slackből rögzített eseményekkel veti össze, a mag által olvasott mezőkre szűkítve, kicserélt azonosítókkal és szöveggel. Eddig rögzítve: egy csatornába lépés és egy ágens szálbeli válasza. A felső szintű poszt, a szerkesztés, a broadcast és a törlés nyitott, amíg nincs rögzítve. A valódi Slack minden későbbi meglepetése előbb rögzített minta lesz, és csak utána változik a hamis Slack.
+2. **Maguk a szabályok.** Az ellenőrzők azt bizonyítják, hogy a kód betartja a `RULES.md`-t; azt semmi, hogy a `RULES.md` azt mondja, amit akarunk. Egy ellenőrzés gyengítéssel is átengedhető. Az első zöld futás utáni minden változás a szabályokban, az ellenőrzőkben és a hamis Slackben az okával együtt naplózva van a README-ben.
+3. **A fogadó munkamenet.** Az eszköz idézett adatként keretezi az üzenetet; hogy az olvasó modell valóban így kezeli-e, azt itt egyetlen teszt sem mutathatja meg.
 
 Hogy a módszer mit adott és mibe került, az a README-ben van: [Method and what it gave](../../README.md#method-and-what-it-gave).
 
 ## 8. Mi kész, és mi nincs még
 
-| Rész                                               | Állapot     | Megjegyzés                                                                                                                          |
-| -------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `RULES.md`                                         | kész        | Greg 2026-11-17-i döntéseivel frissítve.                                                                                            |
-| Mag és üzenetformátum                              | kész        | Tiszta függvények, I/O nélkül.                                                                                                      |
-| Szimulátor                                         | kész        | 3000 seed × 120 lépés és 300 × 600, hiba nélkül; 33 teszt zöld. Már az alvó laptopot és a lassú, hibázó API-hívásokat is modellezi. |
-| Héj: Socket Mode, MCP stdio, 1Password, zárolófájl | kész        | A `--check` mindhárom ellenőrzése átment: bot token, a #berek-agent-lock olvasása, Socket Mode token.                               |
-| Greg Slack-appja                                   | kész        | Létrehozva, a [`slack-app.md`](slack-app.md) manifestje szerint.                                                                    |
-| Élő próba                                          | folyamatban | Egy eldobható munkamenet ellen fut; a `bob-check` még nincs újraindítva.                                                            |
-| Élő bizonyítás `bob-check`-en                      | nyitott     | A próba után következik.                                                                                                            |
-| 2. lépés: `reply` eszköz                           | tervezett   | Bekapcsol, amint az 1. lépés élő bizonyítása megvan (D4).                                                                           |
-| PR #1                                              | merge-elve  | Az első független review három blokkoló hibát talált; mind javítva, a második körben elfogadva, a CI zöld.                          |
+| Rész                                               | Állapot     | Megjegyzés                                                                                                                                                                       |
+| -------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RULES.md`                                         | kész        | Greg 2026-11-17-i döntéseivel frissítve.                                                                                                                                         |
+| Mag és üzenetformátum                              | kész        | Tiszta függvények, I/O nélkül.                                                                                                                                                   |
+| Szimulátor                                         | kész        | 3000 seed × 120 lépés és 300 × 600, hiba nélkül; 36 teszt zöld, 4 nyitott (még nem rögzített Slack-esemény). Már az alvó laptopot és a lassú, hibázó API-hívásokat is modellezi. |
+| Héj: Socket Mode, MCP stdio, 1Password, zárolófájl | kész        | A `--check` mindhárom ellenőrzése átment: bot token, a #berek-agent-lock olvasása, Socket Mode token.                                                                            |
+| Greg Slack-appja                                   | kész        | Létrehozva, a [`slack-app.md`](slack-app.md) manifestje szerint.                                                                                                                 |
+| Élő próba                                          | folyamatban | Egy eldobható munkamenet ellen fut; a `bob-check` még nincs újraindítva.                                                                                                         |
+| Élő bizonyítás `bob-check`-en                      | nyitott     | A próba után következik.                                                                                                                                                         |
+| 2. lépés: `reply` eszköz                           | tervezett   | Bekapcsol, amint az 1. lépés élő bizonyítása megvan (D4).                                                                                                                        |
+| PR #1                                              | merge-elve  | Az első független review három blokkoló hibát talált; mind javítva, a második körben elfogadva, a CI zöld.                                                                       |
 
 ## 9. Döntések
 

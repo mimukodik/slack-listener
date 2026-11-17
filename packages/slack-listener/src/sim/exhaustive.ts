@@ -24,6 +24,7 @@ import {
 import {
   SlackFake,
   authors,
+  changedEvent,
   toSlack,
   watchedChannel,
   type AuthorLabel,
@@ -300,14 +301,10 @@ function apply(world: World, action: Action, starters: Starters): boolean {
       const previous = toSlack(target);
       target.text = `${target.text} (edited ${world.now})`;
       target.editedTs = msToTs(world.now + 1);
-      emit(world, {
-        type: "message",
-        subtype: "message_changed",
-        channel: watchedChannel,
-        ts: msToTs(world.now + 2),
-        message: toSlack(target),
-        previous_message: previous,
-      });
+      emit(
+        world,
+        changedEvent(previous, toSlack(target), msToTs(world.now + 2)),
+      );
       break;
     }
     case "d":

@@ -1,0 +1,29 @@
+[
+  {
+    "kind": "join",
+    "label": "stranger",
+    "recordedAt": "2026-11-17",
+    "event": {
+      "type": "message",
+      "subtype": "channel_join",
+      "channel": "CWATCHED1",
+      "user": "USTRANGE1",
+      "text": "recorded text",
+      "ts": "1794900000.000001"
+    }
+  },
+  {
+    "kind": "thread_reply",
+    "label": "other_agent",
+    "recordedAt": "2026-11-17",
+    "event": {
+      "type": "message",
+      "channel": "CWATCHED1",
+      "user": "UOTHER001",
+      "app_id": "ARECORDED",
+      "text": "recorded text",
+      "ts": "1794900000.000001",
+      "thread_ts": "1794900000.000002"
+    }
+  }
+]
