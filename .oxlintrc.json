@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript"],
+  "options": {
+    "typeAware": true
+  },
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "eslint/eqeqeq": "warn",
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "args": "none",
+        "caughtErrors": "none",
+        "ignoreRestSiblings": true,
+        "varsIgnorePattern": "^_"
+      }
+    ]
+  },
+  "ignorePatterns": ["**/node_modules/**", "**/*.spec.ts"]
+}
