@@ -83,10 +83,10 @@ describe("two controls on the checks", () => {
 });
 
 describe("bounded exhaustive pass", () => {
-  it("R2 R4 R7 R10 R17: no violation in any sequence of up to 5 actions", () => {
+  it("R2 R7 R10 R17: no violation in any sequence of up to 5 actions", () => {
     const result = runExhaustive(5);
     expect(result.violations).toEqual([]);
-    expect(result.sequences).toBe(3200);
+    expect(result.sequences).toBe(3068);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
   });

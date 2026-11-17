@@ -78,6 +78,8 @@ export interface StoredMessage {
   editedTs: string | undefined;
   deleted: boolean;
   noise: boolean;
+  /** An edit Slack never pushed to a live connection (RULES.md, out of scope for replies). */
+  editMissed?: boolean;
 }
 
 export function toSlack(stored: StoredMessage): SlackMessage {

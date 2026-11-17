@@ -68,6 +68,14 @@ function shape(message: SlackMessage): unknown {
   return {
     type: message.type,
     subtype: message.subtype ?? null,
+    channel:
+      message.channel === undefined ? null : message.channel === watchedChannel,
+    reply_count: message.reply_count !== undefined,
+    latest_reply: message.latest_reply !== undefined,
+    thread_before_ts:
+      message.thread_ts === undefined
+        ? null
+        : Number(message.thread_ts) <= Number(message.ts),
     user: message.user !== undefined,
     bot_id: message.bot_id !== undefined,
     app_id: message.app_id !== undefined,

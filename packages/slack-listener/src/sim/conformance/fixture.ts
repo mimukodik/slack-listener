@@ -98,12 +98,24 @@ const userFor: Record<AuthorLabel, string | undefined> = {
 
 /** Keeps the core's fields, maps ids by side, replaces text and timestamps. */
 export function anonymise(sides: Sides, event: SlackMessage): SlackMessage {
-  const tsMap = new Map<string, string>();
-  const ts = (value: string) => {
-    if (!tsMap.has(value))
-      tsMap.set(value, `1794900000.${String(tsMap.size + 1).padStart(6, "0")}`);
-    return tsMap.get(value) as string;
+  // Timestamps are renumbered in their real order, so a reply stays after its parent.
+  const found = new Set<string>();
+  const collect = (message: SlackMessage | undefined): void => {
+    if (message === undefined) return;
+    for (const value of [
+      message.ts,
+      message.thread_ts,
+      message.latest_reply,
+      message.edited?.ts,
+    ])
+      if (value !== undefined) found.add(value);
+    collect(message.message);
+    collect(message.previous_message);
   };
+  collect(event);
+  const order = [...found].sort((a, b) => Number(a) - Number(b));
+  const ts = (value: string) =>
+    `1794900000.${String(order.indexOf(value) + 1).padStart(6, "0")}`;
   const strip = (message: SlackMessage): SlackMessage => {
     const out: Record<string, unknown> = {};
     for (const key of keptKeys) {

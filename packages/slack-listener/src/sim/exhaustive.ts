@@ -72,7 +72,7 @@ export interface ExhaustiveResult {
   violations: { sequence: string; reason: string }[];
   coverage: {
     possibleDuplicates: number;
-    deliveredAfterOutage: number;
+    deliveredByCatchUp: number;
     editsDelivered: number;
     repliesUnderOwnAgent: number;
   };
@@ -208,13 +208,19 @@ function envelopeEvent(world: World, envelope: Envelope): CoreEvent {
   };
 }
 
+/**
+ * Slack pushes an event only to an open connection; one posted while the
+ * connection is down or the process is stopped reaches the core only through
+ * catch-up. An envelope that was sent but not acknowledged is sent again on the
+ * next connection.
+ */
 function emit(world: World, message: SlackMessage): void {
+  if (!world.socketOpen || world.core === null) return;
   world.envelopeCounter += 1;
   const envelope = { id: `env-${world.envelopeCounter}`, message };
   world.envelopes.push(envelope);
   world.lastEnvelope = envelope;
-  if (world.socketOpen && world.core !== null)
-    feed(world, envelopeEvent(world, envelope));
+  feed(world, envelopeEvent(world, envelope));
 }
 
 /** Let the clock run one action's worth, firing due timers in order. */
@@ -301,6 +307,7 @@ function apply(world: World, action: Action, starters: Starters): boolean {
       const previous = toSlack(target);
       target.text = `${target.text} (edited ${world.now})`;
       target.editedTs = msToTs(world.now + 1);
+      if (!world.socketOpen || world.core === null) target.editMissed = true;
       emit(
         world,
         changedEvent(previous, toSlack(target), msToTs(world.now + 2)),
@@ -366,9 +373,13 @@ function settle(world: World): void {
 
 function check(world: World, sequence: string, result: ExhaustiveResult): void {
   const slack = fake(world);
-  const checker = new SafetyChecker(slack, () => world.crashes);
+  let crashesBefore = 0;
+  const checker = new SafetyChecker(slack, () => crashesBefore);
   try {
-    for (const record of world.session) checker.onDelivery(record.delivery);
+    for (const record of world.session) {
+      crashesBefore = record.crashesBefore;
+      checker.onDelivery(record.delivery);
+    }
   } catch (error) {
     if (!(error instanceof SafetyViolation)) throw error;
     result.violations.push({ sequence, reason: error.message });
@@ -385,9 +396,12 @@ function check(world: World, sequence: string, result: ExhaustiveResult): void {
     return;
   }
   const settledSlack = fake(settled);
-  const after = new SafetyChecker(settledSlack, () => settled.crashes);
+  const after = new SafetyChecker(settledSlack, () => crashesBefore);
   try {
-    for (const record of settled.session) after.onDelivery(record.delivery);
+    for (const record of settled.session) {
+      crashesBefore = record.crashesBefore;
+      after.onDelivery(record.delivery);
+    }
   } catch (error) {
     if (!(error instanceof SafetyViolation)) throw error;
     result.violations.push({ sequence, reason: error.message });
@@ -409,7 +423,7 @@ function check(world: World, sequence: string, result: ExhaustiveResult): void {
       settled.session.some((r) => r.delivery.ts === ts),
     )
   )
-    result.coverage.deliveredAfterOutage += 1;
+    result.coverage.deliveredByCatchUp += 1;
   if (
     sequence.includes("B") &&
     sequence.includes("b") &&
@@ -425,7 +439,7 @@ export function runExhaustive(bound: number): ExhaustiveResult {
     violations: [],
     coverage: {
       possibleDuplicates: 0,
-      deliveredAfterOutage: 0,
+      deliveredByCatchUp: 0,
       editsDelivered: 0,
       repliesUnderOwnAgent: 0,
     },
