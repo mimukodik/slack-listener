@@ -143,9 +143,9 @@ describe("R12 and R13: two instances whose agents answer every message settle", 
   });
 
   it("R11 and R13: the footer names agent and person, and carries the marker only when no reply is needed", () => {
-    const ack = `Received, thanks.\n${footer("bob-check", "Greg", false)}`;
-    const ask = `Can you check this?\n${footer("bob-check", "Greg", true)}`;
-    expect(ack).toContain("bob-check for Greg; Greg did not review it.");
+    const ack = `Received, thanks.\n${footer("checker", "Alex", false)}`;
+    const ask = `Can you check this?\n${footer("checker", "Alex", true)}`;
+    expect(ack).toContain("checker for Alex; Alex did not review it.");
     expect(replyNeededFromText(ack)).toBe(false);
     expect(replyNeededFromText(ask)).toBe(true);
   });

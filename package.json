@@ -1,19 +1,35 @@
 {
-  "name": "slack-listener-workspace",
-  "version": "0.0.0",
+  "name": "slack-listener",
+  "version": "0.1.0",
   "private": true,
+  "description": "A Claude Code channel server that pushes new messages from one Slack channel into a session, quoted as data.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mimukodik/slack-listener.git"
+  },
+  "bin": {
+    "slack-listener": "src/main.ts"
+  },
   "type": "module",
   "scripts": {
+    "start": "node src/main.ts",
     "fmt": "oxfmt --write .",
     "fmt:check": "oxfmt --check .",
-    "lint": "pnpm fmt:check && pnpm -r lint && pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "sim": "pnpm --filter @muhely/slack-listener sim",
-    "exhaustive": "pnpm --filter @muhely/slack-listener exhaustive"
+    "lint": "pnpm fmt:check && OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --tsconfig tsconfig.json --format=unix --deny-warnings src && tsrs --noEmit -p tsconfig.json",
+    "test": "vitest --run",
+    "sim": "node src/sim/run.ts",
+    "exhaustive": "node src/sim/exhaustive.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.4"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
+    "fast-check": "4.10.2",
     "oxfmt": "0.56.0",
     "oxlint": "1.90.0",
+    "tsrs": "0.23.0-ts7.1.0-beta",
     "vitest": "^4.1.12"
   },
   "engines": {
