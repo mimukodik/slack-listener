@@ -65,10 +65,14 @@ exception.
 - **R8. The instance reconnects.** After any disconnect or failed connection attempt
   the instance tries again, with a wait that grows to at most 60 seconds, for as long
   as it runs.
-- **R9. A thread reply can be answered alone.** A delivered thread reply carries the
-  thread's `thread_ts`, the first line of its parent (up to 120 characters) and a
-  link to the message. The receiving session can then answer in the right thread
-  without looking anything up.
+- **R9. Replaced by R16 on 2026-11-17.** It showed the parent's first line whoever
+  wrote the parent, which let a non-allowed sender's text into the session.
+- **R16. A thread reply can be answered alone.** A delivered thread reply carries the
+  thread's `thread_ts` and a link to the message. When the thread was started by an
+  allowed sender (R10), it also carries that sender's id and name and the first line
+  of the parent (up to 120 characters); otherwise it says only that the thread was
+  started by someone outside the configured people. The receiving session can then
+  answer in the right thread without looking anything up.
 
 ## Step 2: answering through the tool
 
@@ -100,6 +104,9 @@ posting stays off until `posting: true` is set in the configuration.
 ## Out of scope
 
 - Files, reactions and huddles.
+- Messages Slack pushes more than 3 seconds apart in reverse order of their `ts`. The
+  tool holds each live message for 3 seconds and orders what it holds (R4); a wider
+  reordering by Slack can reach the session out of order.
 - Messages older than 24 hours at the time of catching up, and replies in threads whose
   first message is older than 7 days.
 - An edit made while the instance was disconnected or stopped, to a thread reply, when

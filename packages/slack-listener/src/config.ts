@@ -71,6 +71,14 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
       "config: name at least one person in ownPeople or otherPeople",
     );
   }
+  const sides = [...ownPeople, ...idList(record, "ownBots")].filter((id) =>
+    [...otherPeople, ...idList(record, "otherBots")].includes(id),
+  );
+  if (sides.length > 0) {
+    throw new ConfigError(
+      `config: ${sides.join(", ")} is on both sides; an id belongs to one side`,
+    );
+  }
   const stateDir = expandHome(
     typeof record.stateDir === "string"
       ? record.stateDir

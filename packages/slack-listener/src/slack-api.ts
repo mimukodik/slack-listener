@@ -74,9 +74,9 @@ export class SlackApi {
       collected: SlackMessage[],
       count: number,
     ): Effect.Effect<SlackMessage[], SlackApiError> => {
-      if (count >= 20) {
+      if (count >= 100) {
         return Effect.fail(
-          new SlackApiError({ method, reason: "more than 20 pages" }),
+          new SlackApiError({ method, reason: "more than 100 pages" }),
         );
       }
       return this.call<SlackResponse & { messages?: SlackMessage[] }>(method, {
@@ -162,10 +162,10 @@ export class SlackApi {
     );
   }
 
-  parentText(
+  parentMessage(
     channel: string,
     threadTs: string,
-  ): Effect.Effect<string, SlackApiError> {
+  ): Effect.Effect<SlackMessage | null, SlackApiError> {
     return this.call<SlackResponse & { messages?: SlackMessage[] }>(
       "conversations.replies",
       {
@@ -174,7 +174,12 @@ export class SlackApi {
         limit: "1",
         inclusive: "true",
       },
-    ).pipe(Effect.map((body) => body.messages?.[0]?.text ?? ""));
+    ).pipe(
+      Effect.map((body) => {
+        const first = body.messages?.[0];
+        return first !== undefined && first.ts === threadTs ? first : null;
+      }),
+    );
   }
 
   channelInfo(

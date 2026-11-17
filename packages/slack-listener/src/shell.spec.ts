@@ -103,3 +103,20 @@ describe("R6: tokens stay secret", () => {
     expect(redact(line)).toBe("failed with [token] and [token] and [token]");
   });
 });
+
+describe("configuration sides", () => {
+  it("R10: refuses an id configured on both sides", () => {
+    const both = {
+      channel: "C0WATCH001",
+      ownPeople: ["U0SHARED1"],
+      otherPeople: ["U0SHARED1"],
+      tokens: {
+        bot: "op://vault/item/bot_token",
+        app: "op://vault/item/app_token",
+      },
+    };
+    expect(() => parseConfig(JSON.stringify(both), "test.json")).toThrow(
+      /both sides/,
+    );
+  });
+});

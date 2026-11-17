@@ -12,6 +12,7 @@ export interface CoreConfig {
   maxBackoffMs: number;
   tickMs: number;
   holdMs: number;
+  idleReconnectMs: number;
   queueLimit: number;
 }
 
@@ -22,7 +23,8 @@ export const defaultLimits = {
   maxBackoffMs: 60 * 1000,
   tickMs: 30 * 1000,
   holdMs: 3 * 1000,
-  queueLimit: 1000,
+  idleReconnectMs: 5 * 60 * 1000,
+  queueLimit: 100_000,
 } as const;
 
 export interface Delivery {
@@ -63,14 +65,14 @@ export type CoreEvent =
       envelopeId: string;
       message: SlackMessage | null;
     }
-  | { type: "history_loaded"; generation: number; messages: SlackMessage[] }
+  | { type: "history_loaded"; catchUpId: number; messages: SlackMessage[] }
   | {
       type: "replies_loaded";
-      generation: number;
+      catchUpId: number;
       threadTs: string;
       messages: SlackMessage[];
     }
-  | { type: "fetch_failed"; generation: number; reason: string }
+  | { type: "fetch_failed"; catchUpId: number; reason: string }
   | { type: "delivered"; key: string }
   | { type: "deliver_failed"; key: string; reason: string }
   | { type: "timer"; name: TimerName };
@@ -78,10 +80,10 @@ export type CoreEvent =
 export type CoreEffect =
   | { type: "connect"; generation: number }
   | { type: "ack"; generation: number; envelopeId: string }
-  | { type: "fetch_history"; generation: number; oldestMs: number }
+  | { type: "fetch_history"; catchUpId: number; oldestMs: number }
   | {
       type: "fetch_replies";
-      generation: number;
+      catchUpId: number;
       threadTs: string;
       oldestMs: number;
     }
@@ -93,7 +95,7 @@ export type CoreEffect =
 export type Connection = "stopped" | "connecting" | "open" | "waiting";
 
 export interface CatchUp {
-  generation: number;
+  id: number;
   startedAtMs: number;
   pending: number;
   items: SlackMessage[];
@@ -111,6 +113,8 @@ export interface State {
   attempt: number;
   live: boolean;
   liveFromTs: string | null;
+  lastFrameMs: number;
+  catchUpSeq: number;
   catchUp: CatchUp | null;
   held: Held[];
   caughtUpUntilMs: number;
@@ -142,6 +146,8 @@ export function initialState(config: CoreConfig): State {
     attempt: 0,
     live: false,
     liveFromTs: null,
+    lastFrameMs: 0,
+    catchUpSeq: 0,
     catchUp: null,
     held: [],
     caughtUpUntilMs: 0,
@@ -236,14 +242,15 @@ function consider(
   source: "live" | "history",
 ): State {
   const config = state.config;
-  if (message.channel !== undefined && message.channel !== config.channel)
-    return state;
+  if (message.channel !== config.channel) return state;
 
   if (message.subtype === "message_changed") {
     const edited = message.message;
     if (!edited?.edited) return state;
-    if (edited.text === message.previous_message?.text) return state;
-    return considerEdit(state, { ...edited, channel: config.channel });
+    const editedMessage = { ...edited, channel: config.channel };
+    if (edited.text === message.previous_message?.text)
+      return claimSilently(state, editedMessage);
+    return considerEdit(state, editedMessage);
   }
   if (!deliverableSubtypes.has(message.subtype)) return state;
   if (
@@ -274,6 +281,16 @@ function consider(
   }
   if (source === "history" && editKey) return considerEdit(state, message);
   return state;
+}
+
+function claimSilently(state: State, message: SlackMessage): State {
+  if (!message.edited) return state;
+  const editKey = `e:${message.ts}:${message.edited.ts}`;
+  if (state.claimed[editKey] !== undefined) return state;
+  return {
+    ...state,
+    claimed: { ...state.claimed, [editKey]: tsToMs(message.edited.ts) },
+  };
 }
 
 function considerEdit(state: State, message: SlackMessage): State {
@@ -323,15 +340,17 @@ function scheduleReconnect(
 }
 
 function startCatchUp(state: State, now: number, effects: CoreEffect[]): State {
+  const id = state.catchUpSeq + 1;
   effects.push({
     type: "fetch_history",
-    generation: state.generation,
+    catchUpId: id,
     oldestMs: now - state.config.threadWindowMs,
   });
   return {
     ...state,
+    catchUpSeq: id,
     catchUp: {
-      generation: state.generation,
+      id,
       startedAtMs: now,
       pending: 1,
       items: [],
@@ -414,6 +433,19 @@ function finishCatchUp(
   return pump(next, effects);
 }
 
+function connect(state: State, now: number, effects: CoreEffect[]): State {
+  const generation = state.generation + 1;
+  effects.push({ type: "connect", generation });
+  return {
+    ...state,
+    connection: "connecting",
+    generation,
+    live: false,
+    catchUp: null,
+    lastFrameMs: now,
+  };
+}
+
 function prune(state: State, now: number): State {
   const horizon =
     now - state.config.threadWindowMs - state.config.catchUpWindowMs;
@@ -459,12 +491,7 @@ function reduce(
             held: [...saved.held],
           }
         : { ...state, caughtUpUntilMs: now, floorMs: now };
-      next = {
-        ...next,
-        connection: "connecting",
-        generation: state.generation + 1,
-      };
-      effects.push({ type: "connect", generation: next.generation });
+      next = connect(next, now, effects);
       effects.push({
         type: "set_timer",
         name: "tick",
@@ -495,8 +522,9 @@ function reduce(
     case "hello": {
       if (event.generation !== state.generation || state.connection !== "open")
         return state;
-      if (state.live || state.catchUp !== null) return state;
-      return startCatchUp(state, now, effects);
+      const alive = { ...state, lastFrameMs: now };
+      if (state.live || state.catchUp !== null) return alive;
+      return startCatchUp(alive, now, effects);
     }
     case "envelope": {
       if (event.generation !== state.generation || state.connection !== "open")
@@ -507,10 +535,11 @@ function reduce(
           generation: event.generation,
           envelopeId: event.envelopeId,
         });
-        return state;
+        return { ...state, lastFrameMs: now };
       }
       const next = {
         ...state,
+        lastFrameMs: now,
         held: [...state.held, { message: event.message, arrivedAtMs: now }],
       };
       effects.push({ type: "save", saved: snapshot(next) });
@@ -530,8 +559,7 @@ function reduce(
     }
     case "history_loaded": {
       const catchUp = state.catchUp;
-      if (catchUp === null || event.generation !== catchUp.generation)
-        return state;
+      if (catchUp === null || event.catchUpId !== catchUp.id) return state;
       const lowerBound = catchUpLowerBound(state, now);
       const items = [...catchUp.items];
       let pending = catchUp.pending - 1;
@@ -546,7 +574,7 @@ function reduce(
         ) {
           effects.push({
             type: "fetch_replies",
-            generation: catchUp.generation,
+            catchUpId: catchUp.id,
             threadTs: message.ts,
             oldestMs: lowerBound,
           });
@@ -561,8 +589,7 @@ function reduce(
     }
     case "replies_loaded": {
       const catchUp = state.catchUp;
-      if (catchUp === null || event.generation !== catchUp.generation)
-        return state;
+      if (catchUp === null || event.catchUpId !== catchUp.id) return state;
       const lowerBound = catchUpLowerBound(state, now);
       const items = [...catchUp.items];
       for (const message of event.messages) {
@@ -579,8 +606,7 @@ function reduce(
     }
     case "fetch_failed": {
       const catchUp = state.catchUp;
-      if (catchUp === null || event.generation !== catchUp.generation)
-        return state;
+      if (catchUp === null || event.catchUpId !== catchUp.id) return state;
       effects.push({
         type: "log",
         message: `catch-up failed: ${event.reason}`,
@@ -625,9 +651,7 @@ function onTimer(
   switch (name) {
     case "reconnect": {
       if (state.connection !== "waiting") return state;
-      const generation = state.generation + 1;
-      effects.push({ type: "connect", generation });
-      return { ...state, connection: "connecting", generation };
+      return connect(state, now, effects);
     }
     case "catch_up": {
       if (state.connection !== "open" || state.live || state.catchUp !== null)
@@ -649,9 +673,21 @@ function onTimer(
         name: "tick",
         atMs: now + state.config.tickMs,
       });
+      const connected =
+        state.connection === "connecting" || state.connection === "open";
+      if (connected && now - state.lastFrameMs > state.config.idleReconnectMs) {
+        effects.push({
+          type: "log",
+          message: `no frame from slack for ${Math.round((now - state.lastFrameMs) / 1000)} s, reconnecting`,
+        });
+        return connect(state, now, effects);
+      }
       if (!state.live) return state;
       const next = prune(
-        { ...state, caughtUpUntilMs: Math.max(state.caughtUpUntilMs, now) },
+        {
+          ...state,
+          caughtUpUntilMs: Math.max(state.caughtUpUntilMs, state.lastFrameMs),
+        },
         now,
       );
       effects.push({ type: "save", saved: snapshot(next) });

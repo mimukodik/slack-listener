@@ -25,7 +25,7 @@ describe("simulator", () => {
   });
 });
 
-describe("three controls on the checks", () => {
+describe("two controls on the checks", () => {
   it("a build that delivers nothing fails a progress rule", () => {
     const refuseAll: StepFn = (state, event, now) => {
       const result = step(state, event, now);

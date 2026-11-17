@@ -39,28 +39,40 @@ function readToken(reference: string, expectedPrefix: string): string {
   return value;
 }
 
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function acquireLock(path: string): () => void {
   mkdirSync(dirname(path), { recursive: true });
-  try {
-    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const holder = Number(readFileSync(path, "utf8"));
-    let alive = false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      process.kill(holder, 0);
-      alive = holder !== process.pid;
-    } catch {
-      alive = false;
+      writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+      return () => rmSync(path, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    if (alive) {
+    const holder = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+    if (
+      Number.isInteger(holder) &&
+      holder > 0 &&
+      holder !== process.pid &&
+      processAlive(holder)
+    ) {
       throw new Error(
         `another listener (pid ${holder}) already watches this channel; two would split Slack's events between them`,
       );
     }
-    writeFileSync(path, String(process.pid), { mode: 0o600 });
+    rmSync(path, { force: true });
   }
-  return () => rmSync(path, { force: true });
+  throw new Error(
+    "could not take the lock file: another listener is starting at the same moment",
+  );
 }
 
 function argValue(name: string): string | null {
@@ -144,7 +156,12 @@ function demo(): void {
     {
       userName: "demo",
       channelName: "demo",
-      parentLine: "Demo thread parent",
+      parent: {
+        shown: true,
+        authorId: "UDEMO0002",
+        authorName: "demo parent",
+        line: "Demo thread parent",
+      },
       permalink: null,
     },
   );
@@ -198,7 +215,18 @@ async function main(): Promise<void> {
   });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
-  shell = new Shell(config, api, sink, log);
+  const fail = (reason: string) => {
+    log(`fatal: ${reason}`);
+    shell?.stop();
+    release();
+    process.exit(1);
+  };
+  process.on("unhandledRejection", (error) =>
+    fail(
+      `unhandled: ${error instanceof Error ? error.message : String(error)}`,
+    ),
+  );
+  shell = new Shell(config, api, sink, log, fail);
   shell.start(readSaved(config.stateFile));
   log(`watching ${config.core.channel} as ${config.serverName}`);
 }

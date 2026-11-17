@@ -12,6 +12,7 @@ import { Data, Effect } from "effect";
 import type { ListenerConfig } from "./config.ts";
 import {
   initialState,
+  senderAllowed,
   step,
   type CoreEffect,
   type CoreEvent,
@@ -20,7 +21,7 @@ import {
   type State,
   type TimerName,
 } from "./core.ts";
-import { firstLine, renderDelivery } from "./format.ts";
+import { firstLine, renderDelivery, type ParentInfo } from "./format.ts";
 import type { ChannelServer } from "./mcp.ts";
 import { redact, type SlackApi } from "./slack-api.ts";
 import { msToTs, type SlackMessage } from "./slack.ts";
@@ -69,13 +70,19 @@ interface SocketEnvelope {
   payload?: { event?: SlackMessage };
 }
 
+interface Parent {
+  allowed: boolean;
+  authorId: string;
+  line: string;
+}
+
 export class Shell {
   private state: State;
   private readonly timers = new Map<TimerName, ReturnType<typeof setTimeout>>();
   private socket: WebSocket | null = null;
   private socketGeneration = 0;
   private readonly names = new Map<string, string>();
-  private readonly parents = new Map<string, string>();
+  private readonly parents = new Map<string, Parent>();
   private teamUrl: string | null = null;
   private readonly queue: CoreEvent[] = [];
   private stepping = false;
@@ -83,28 +90,24 @@ export class Shell {
   private readonly api: SlackApi;
   private readonly sink: ChannelServer;
   private readonly log: (line: string) => void;
+  private readonly fatal: (reason: string) => void;
 
   constructor(
     config: ListenerConfig,
     api: SlackApi,
     sink: ChannelServer,
     log: (line: string) => void,
+    fatal: (reason: string) => void,
   ) {
     this.config = config;
     this.api = api;
     this.sink = sink;
     this.log = (line) => log(redact(line));
+    this.fatal = (reason) => fatal(redact(reason));
     this.state = initialState(config.core);
   }
 
   start(saved: Saved | null): void {
-    void Effect.runPromise(Effect.result(this.api.teamUrl())).then((result) => {
-      if (result._tag === "Success") this.teamUrl = result.success;
-      else
-        this.log(
-          `auth.test failed, links will be missing: ${result.failure.reason}`,
-        );
-    });
     this.dispatch({ type: "started", saved });
   }
 
@@ -124,6 +127,8 @@ export class Shell {
         this.state = result.state;
         for (const effect of result.effects) this.run(effect);
       }
+    } catch (error) {
+      this.fatal(`core stopped: ${(error as Error).message}`);
     } finally {
       this.stepping = false;
     }
@@ -135,8 +140,8 @@ export class Shell {
         try {
           writeSaved(this.config.stateFile, effect.saved);
         } catch (error) {
-          this.log(
-            `state file write failed, a crash now may repeat or lose a delivery: ${(error as Error).message}`,
+          this.fatal(
+            `state file write failed, stopping before a delivery could repeat or be lost: ${(error as Error).message}`,
           );
         }
         return;
@@ -169,18 +174,18 @@ export class Shell {
         return;
       case "fetch_history":
         this.fetch(
-          effect.generation,
+          effect.catchUpId,
           this.api.history(this.config.core.channel, msToTs(effect.oldestMs)),
           (messages) => ({
             type: "history_loaded",
-            generation: effect.generation,
+            catchUpId: effect.catchUpId,
             messages,
           }),
         );
         return;
       case "fetch_replies":
         this.fetch(
-          effect.generation,
+          effect.catchUpId,
           this.api.replies(
             this.config.core.channel,
             effect.threadTs,
@@ -188,7 +193,7 @@ export class Shell {
           ),
           (messages) => ({
             type: "replies_loaded",
-            generation: effect.generation,
+            catchUpId: effect.catchUpId,
             threadTs: effect.threadTs,
             messages,
           }),
@@ -201,7 +206,7 @@ export class Shell {
   }
 
   private fetch(
-    generation: number,
+    catchUpId: number,
     program: Effect.Effect<SlackMessage[], { reason: string; method: string }>,
     toEvent: (messages: SlackMessage[]) => CoreEvent,
   ): void {
@@ -210,7 +215,7 @@ export class Shell {
         Effect.match({
           onFailure: (error): CoreEvent => ({
             type: "fetch_failed",
-            generation,
+            catchUpId,
             reason: `${error.method}: ${error.reason}`,
           }),
           onSuccess: toEvent,
@@ -300,40 +305,83 @@ export class Shell {
     );
   }
 
-  private enrichParent(delivery: Delivery): Effect.Effect<string | null> {
+  private enrichParent(delivery: Delivery): Effect.Effect<ParentInfo | null> {
     if (!delivery.isReply) return Effect.succeed(null);
     const cached = this.parents.get(delivery.threadTs);
-    if (cached !== undefined) return Effect.succeed(cached);
-    return this.api.parentText(delivery.channel, delivery.threadTs).pipe(
-      Effect.map((text) => firstLine(text)),
-      Effect.tap((line) =>
-        Effect.sync(() => this.parents.set(delivery.threadTs, line)),
-      ),
-      Effect.catch(() => Effect.succeed(null)),
+    const lookup: Effect.Effect<Parent | null> =
+      cached !== undefined
+        ? Effect.succeed(cached)
+        : this.api.parentMessage(delivery.channel, delivery.threadTs).pipe(
+            Effect.map((message): Parent | null =>
+              message === null
+                ? null
+                : {
+                    allowed: senderAllowed(this.config.core, message),
+                    authorId: message.user ?? "",
+                    line: firstLine(message.text ?? ""),
+                  },
+            ),
+            Effect.tap((parent) =>
+              Effect.sync(() => {
+                if (parent !== null)
+                  this.parents.set(delivery.threadTs, parent);
+              }),
+            ),
+            Effect.catch(() => Effect.succeed(null)),
+          );
+    return lookup.pipe(
+      Effect.flatMap((parent): Effect.Effect<ParentInfo | null> => {
+        if (parent === null) return Effect.succeed(null);
+        if (!parent.allowed) return Effect.succeed({ shown: false });
+        return this.enrichName(parent.authorId).pipe(
+          Effect.map((authorName) => ({
+            shown: true,
+            authorId: parent.authorId,
+            authorName,
+            line: parent.line,
+          })),
+        );
+      }),
     );
   }
 
-  private permalink(delivery: Delivery): string | null {
-    if (this.teamUrl === null || this.teamUrl === "") return null;
-    const base = `${this.teamUrl}archives/${delivery.channel}/p${delivery.ts.replace(".", "")}`;
-    return delivery.isReply
-      ? `${base}?thread_ts=${delivery.threadTs}&cid=${delivery.channel}`
-      : base;
+  private enrichPermalink(delivery: Delivery): Effect.Effect<string | null> {
+    const team =
+      this.teamUrl !== null
+        ? Effect.succeed(this.teamUrl)
+        : this.api.teamUrl().pipe(
+            Effect.tap((url) => Effect.sync(() => (this.teamUrl = url))),
+            Effect.catch(() => Effect.succeed("")),
+          );
+    return team.pipe(
+      Effect.map((url) => {
+        if (url === "") return null;
+        const base = `${url}archives/${delivery.channel}/p${delivery.ts.replace(".", "")}`;
+        return delivery.isReply
+          ? `${base}?thread_ts=${delivery.threadTs}&cid=${delivery.channel}`
+          : base;
+      }),
+    );
   }
 
   private deliver(delivery: Delivery): void {
-    if (!delivery.isReply)
-      this.parents.set(delivery.ts, firstLine(delivery.text));
+    if (!delivery.isReply && delivery.kind === "message")
+      this.parents.set(delivery.ts, {
+        allowed: true,
+        authorId: delivery.user,
+        line: firstLine(delivery.text),
+      });
     const program = Effect.all({
       userName: this.enrichName(delivery.user),
-      parentLine: this.enrichParent(delivery),
+      parent: this.enrichParent(delivery),
+      permalink: this.enrichPermalink(delivery),
     }).pipe(
-      Effect.flatMap(({ userName, parentLine }) => {
+      Effect.flatMap(({ userName, parent, permalink }) => {
         const rendered = renderDelivery(delivery, {
           userName,
           channelName: this.config.channelName,
-          parentLine,
-          permalink: this.permalink(delivery),
+          parent,
+          permalink,
         });
         return this.sink.notify(rendered.content, rendered.meta);
       }),
