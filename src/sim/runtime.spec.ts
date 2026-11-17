@@ -61,7 +61,7 @@ async function runSeed(seed: number, crashAtMs: number | null): Promise<Run> {
   const log: string[] = [];
   // The tripwire is on before the program starts: Effect runs a forked
   // program synchronously up to its first wait.
-  const { value, tripped } = await withTripwire(() => {
+  const { value, tripped } = await withTripwire(async () => {
     runtime.start(program(runtime, log));
     if (crashAtMs !== null)
       runtime.at(
@@ -145,7 +145,7 @@ describe("simulation runtime: one seed, one run", () => {
       globalThis.setInterval,
       globalThis.setImmediate,
     ];
-    const { tripped } = await withTripwire(async () => {
+    const { tripped } = await withTripwire(() => {
       const calls = [
         () => setInterval(() => {}, 10),
         () => setImmediate(() => {}),
@@ -154,8 +154,16 @@ describe("simulation runtime: one seed, one run", () => {
     });
     expect(tripped.map((t) => t.name)).toEqual(["setInterval", "setImmediate"]);
     await expect(
-      withTripwire(() => Promise.reject(new Error("run failed"))),
+      withTripwire(() => {
+        throw new Error("run failed");
+      }),
     ).rejects.toThrow("run failed");
+    await expect(
+      withTripwire(async () => {
+        await Promise.resolve();
+        throw new Error("run rejected");
+      }),
+    ).rejects.toThrow("run rejected");
     expect([
       globalThis.setTimeout,
       globalThis.setInterval,
@@ -165,7 +173,7 @@ describe("simulation runtime: one seed, one run", () => {
 
   it("the tripwire catches a real timer inside the program", async () => {
     const runtime = new SimRuntime(1);
-    const { value, tripped } = await withTripwire(() => {
+    const { value, tripped } = await withTripwire(async () => {
       runtime.start(
         Effect.gen(function* () {
           yield* Effect.sleep(Duration.millis(5));
@@ -299,7 +307,7 @@ describe("simulation runtime: one seed, one run", () => {
       const log: string[] = [];
       runtime.start(
         Effect.promise(
-          () =>
+          async () =>
             new Promise<void>((resolve) => {
               runtime.at(1000, resolve);
             }),

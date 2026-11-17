@@ -328,6 +328,7 @@ function considerEdit(state: State, message: SlackMessage): State {
 function pump(state: State, effects: CoreEffect[]): State {
   if (state.inflight !== null || state.queue.length === 0) return state;
   const [next, ...rest] = state.queue;
+  assert(next !== undefined, "pump: a non-empty queue has no head");
   const pumped = { ...state, inflight: next, queue: rest };
   effects.push({ type: "save", saved: snapshot(pumped) });
   effects.push({ type: "deliver", delivery: next });

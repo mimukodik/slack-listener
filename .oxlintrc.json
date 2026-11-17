@@ -50,7 +50,13 @@
         "ignoreRestSiblings": true,
         "varsIgnorePattern": "^_"
       }
-    ]
+    ],
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "no-useless-catch": "error",
+    "typescript/require-await": "error",
+    "typescript/promise-function-async": "error"
   },
   "overrides": [
     {

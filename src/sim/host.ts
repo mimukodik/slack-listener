@@ -8,7 +8,7 @@
 
 const realSetImmediate = globalThis.setImmediate;
 
-export function settle(): Promise<void> {
+export async function settle(): Promise<void> {
   return new Promise<void>((resolve) => {
     realSetImmediate(resolve);
   });
@@ -19,7 +19,7 @@ export type Tripped = { readonly name: string; readonly stack: string };
 const watched = ["setTimeout", "setInterval", "setImmediate"] as const;
 
 export async function withTripwire<T>(
-  run: () => Promise<T>,
+  run: () => T | Promise<T>,
 ): Promise<{ readonly value: T; readonly tripped: readonly Tripped[] }> {
   const tripped: Tripped[] = [];
   const saved = watched.map((name) => [name, globalThis[name]] as const);

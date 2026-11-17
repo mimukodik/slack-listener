@@ -16,7 +16,36 @@
     "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/slack-listener.tsbuildinfo",
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "erasableSyntaxOnly": true
+    "erasableSyntaxOnly": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "includeSuggestionsInTsc": false,
+        "diagnosticSeverity": {
+          "floatingEffect": "error",
+          "missingEffectError": "error",
+          "missingEffectContext": "error",
+          "missingLayerContext": "error",
+          "globalErrorInEffectFailure": "error",
+          "globalErrorInEffectCatch": "error",
+          "unknownInEffectCatch": "error",
+          "effectTryWithoutCatch": "error",
+          "tryCatchInEffectGen": "error",
+          "catchUnfailableEffect": "error",
+          "effectInFailure": "error",
+          "effectInVoidSuccess": "error",
+          "anyUnknownInErrorContext": "error",
+          "unsafeEffectTypeAssertion": "error",
+          "runEffectInsideEffect": "error",
+          "returnEffectInGen": "error",
+          "lazyPromiseInEffectSync": "error",
+          "missingStarInYieldEffectGen": "error",
+          "missingReturnYieldStar": "error"
+        }
+      }
+    ]
   },
   "include": ["src/**/*.ts"],
   "exclude": [
