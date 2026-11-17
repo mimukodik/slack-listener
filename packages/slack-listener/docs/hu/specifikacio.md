@@ -25,30 +25,31 @@ flowchart LR
   listener2 -. saját bot .-> slack2["Slack<br/>ugyanabba a szálba"]
 ```
 
-- **Befelé:** az eszköz a munkamenet gyermekfolyamataként fut, MCP-n (stdio) beszél vele, és `<channel source="slack-listener">` eseményként adja át az üzenetet. Az üzenet mellett mindig ott van a `channel`, a `ts`, a `thread_ts`, a szerző azonosítója és neve, valamint a küldés ideje. Szálbeli válasznál a szülőüzenet első sora és egy link is.
+- **Befelé:** az eszköz a munkamenet gyermekfolyamataként fut, MCP-n (stdio) beszél vele, és `<channel source="slack-listener">` eseményként adja át az üzenetet. Az üzenet mellett mindig ott van a `channel`, a `ts`, a `thread_ts`, a szerző azonosítója és neve, valamint a küldés ideje. Szálbeli válasznál egy link is. Ha a szálat beállított ember indította, akkor ő és a szülőüzenet első sora is; ha nem, csak annyi, hogy a szálat valaki más indította (R16). Az idézett szöveg minden sora `> `-vel kezdődik, így semmilyen szöveg nem adhatja ki magát az eszköz saját sorának. Ha egy kapcsolaton 5 percig semmi nem jön a Slacktől, az eszköz újat nyit, és a felzárkózás az utolsó megkapott jeltől indul. Így alvó laptop vagy csendben megszakadt kapcsolat után sem vész el üzenet (R7).
 - **Kifelé, a 2. lépésben:** a munkamenet a `reply` eszközzel válaszol. A válasz az oldal saját botjaként, a megfelelő szálba megy ki. Ez addig ki van kapcsolva, amíg a 9. részben leírt feltételek nem teljesülnek (D4).
 
 ## 3. A szabályok röviden
 
 A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, melyik mikor él. Minden szabálynak egy ellenőrzője van a szimulátorban, és a tesztek nevében is ott az azonosítója. Egy azonosítót sosem használunk újra; a lecserélt vagy törölt szabály a helyén marad, megjelölve.
 
-| Szabály | Mikor él   | Miről szól                                              |
-| ------- | ---------- | ------------------------------------------------------- |
-| R1      | lecserélve | helyette R10                                            |
-| R2      | 1. lépés   | legfeljebb egyszeri kézbesítés                          |
-| R3      | 1. lépés   | a szöveg adat, nem utasítás                             |
-| R4      | 1. lépés   | sorrend szálon belül és a felső szinten                 |
-| R5      | 1. lépés   | a zaj nem érkezik meg                                   |
-| R6      | 1. lépés   | a tokenek titokban maradnak                             |
-| R7      | 1. lépés   | minden engedett üzenet megérkezik, a kiesés alattiak is |
-| R8      | 1. lépés   | újracsatlakozás                                         |
-| R9      | 1. lépés   | a szálbeli válasz önmagában is megválaszolható          |
-| R10     | 1. lépés   | a másik oldal hallatszik, a saját ágenseink nem         |
-| R11     | 2. lépés   | a poszt megmondja, ki írta                              |
-| R12     | 2. lépés   | az ágensek hurka megáll                                 |
-| R13     | 2. lépés   | a nyugtázásra nem válaszolunk                           |
-| R14     | törölve    | volt: óránkénti szálkorlát (D2)                         |
-| R15     | 2. lépés   | egy poszt pontosan egyszer jelenik meg                  |
+| Szabály | Mikor él   | Miről szól                                                                                             |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------------ |
+| R1      | lecserélve | helyette R10                                                                                           |
+| R2      | 1. lépés   | legfeljebb egyszeri kézbesítés                                                                         |
+| R3      | 1. lépés   | a szöveg adat, nem utasítás                                                                            |
+| R4      | 1. lépés   | sorrend szálon belül és a felső szinten                                                                |
+| R5      | 1. lépés   | a zaj nem érkezik meg                                                                                  |
+| R6      | 1. lépés   | a tokenek titokban maradnak                                                                            |
+| R7      | 1. lépés   | minden engedett üzenet megérkezik, a kiesés alattiak is                                                |
+| R8      | 1. lépés   | újracsatlakozás                                                                                        |
+| R9      | lecserélve | helyette R16: a szülőt bárki írta, idézte                                                              |
+| R10     | 1. lépés   | a másik oldal hallatszik, a saját ágenseink nem                                                        |
+| R16     | 1. lépés   | a szálbeli válasz önmagában is megválaszolható; a szülőt csak akkor idézi, ha a szerzője engedélyezett |
+| R11     | 2. lépés   | a poszt megmondja, ki írta                                                                             |
+| R12     | 2. lépés   | az ágensek hurka megáll                                                                                |
+| R13     | 2. lépés   | a nyugtázásra nem válaszolunk                                                                          |
+| R14     | törölve    | volt: óránkénti szálkorlát (D2)                                                                        |
+| R15     | 2. lépés   | egy poszt pontosan egyszer jelenik meg                                                                 |
 
 R2 alól egy kivétel van: ha az eszköz épp a kézbesítés és annak elmentése között omlik össze, újraindulás után ugyanazt az üzenetet még egyszer elküldi, `possible_duplicate` jelöléssel. Pontosan egyszeri kézbesítés itt nem lehetséges, mert a munkamenet nem igazolja vissza, mit kapott meg.
 
@@ -91,17 +92,17 @@ Hogy a módszer mit adott és mibe került, az a README-ben van: [Method and wha
 
 ## 8. Mi kész, és mi nincs még
 
-| Rész                                               | Állapot     | Megjegyzés                                                                                                        |
-| -------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `RULES.md`                                         | kész        | Greg 2026-11-17-i döntéseivel frissítve.                                                                          |
-| Mag és üzenetformátum                              | kész        | Tiszta függvények, I/O nélkül.                                                                                    |
-| Szimulátor                                         | kész        | 5000 seed × 120 lépés és 500 × 600, hiba nélkül; 26 teszt zöld, köztük a 2. lépés kétpéldányos leállási modellje. |
-| Héj: Socket Mode, MCP stdio, 1Password, zárolófájl | kész        | A `--check` mindhárom ellenőrzése átment: bot token, a #berek-agent-lock olvasása, Socket Mode token.             |
-| Greg Slack-appja                                   | kész        | Létrehozva, a [`slack-app.md`](slack-app.md) manifestje szerint.                                                  |
-| Élő próba                                          | folyamatban | Egy eldobható munkamenet ellen fut; a `bob-check` még nincs újraindítva.                                          |
-| Élő bizonyítás `bob-check`-en                      | nyitott     | A próba után következik.                                                                                          |
-| 2. lépés: `reply` eszköz                           | tervezett   | Bekapcsol, amint az 1. lépés élő bizonyítása megvan (D4).                                                         |
-| PR #1                                              | nyitott     | Review alatt.                                                                                                     |
+| Rész                                               | Állapot     | Megjegyzés                                                                                                                                                                           |
+| -------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RULES.md`                                         | kész        | Greg 2026-11-17-i döntéseivel frissítve.                                                                                                                                             |
+| Mag és üzenetformátum                              | kész        | Tiszta függvények, I/O nélkül.                                                                                                                                                       |
+| Szimulátor                                         | kész        | 3000 seed × 120 lépés és 300 × 600, hiba nélkül; 31 teszt zöld. Már az alvó laptopot és a lassú, hibázó API-hívásokat is modellezi.                                                  |
+| Héj: Socket Mode, MCP stdio, 1Password, zárolófájl | kész        | A `--check` mindhárom ellenőrzése átment: bot token, a #berek-agent-lock olvasása, Socket Mode token.                                                                                |
+| Greg Slack-appja                                   | kész        | Létrehozva, a [`slack-app.md`](slack-app.md) manifestje szerint.                                                                                                                     |
+| Élő próba                                          | folyamatban | Egy eldobható munkamenet ellen fut; a `bob-check` még nincs újraindítva.                                                                                                             |
+| Élő bizonyítás `bob-check`-en                      | nyitott     | A próba után következik.                                                                                                                                                             |
+| 2. lépés: `reply` eszköz                           | tervezett   | Bekapcsol, amint az 1. lépés élő bizonyítása megvan (D4).                                                                                                                            |
+| PR #1                                              | nyitott     | Az első független review három blokkoló hibát talált (csendben megszakadt kapcsolat, elavult felzárkózási válasz, ellenőrizetlen szálnyitó üzenet); mind javítva, újra review alatt. |
 
 ## 9. Döntések
 
