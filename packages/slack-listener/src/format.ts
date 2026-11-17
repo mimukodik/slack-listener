@@ -36,8 +36,14 @@ function neutralise(text: string): string {
 
 export const quotePrefix = "> ";
 
+export function splitLines(text: string): string[] {
+  return text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/);
+}
+
 function flat(text: string): string {
-  return neutralise(text).replace(/\s+/g, " ").trim();
+  return neutralise(text)
+    .replace(/[\s\u0085\u2028\u2029]+/g, " ")
+    .trim();
 }
 
 function inline(text: string): string {
@@ -70,7 +76,7 @@ export function renderDelivery(
     );
   }
   lines.push(`Quoted text, every line starts with "${quotePrefix.trim()}":`);
-  for (const line of neutralise(delivery.text).split(/\r?\n/))
+  for (const line of splitLines(neutralise(delivery.text)))
     lines.push(`${quotePrefix}${line}`);
 
   const meta: Record<string, string> = {

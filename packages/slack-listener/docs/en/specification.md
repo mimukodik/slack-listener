@@ -25,31 +25,32 @@ flowchart LR
   listener2 -. own bot .-> slack2["Slack<br/>same thread"]
 ```
 
-- **Inbound:** the tool runs as a child process of the session, talks to it over MCP (stdio), and hands each message over as a `<channel source="slack-listener">` event. Each message carries its `channel`, `ts`, `thread_ts`, the author's id and name, and the time it was posted. A thread reply also carries a link and, when the thread was started by a configured person, that person and the first line of the parent; otherwise it says only that the thread was started by someone outside the configured people (R16). Every line of the quoted text starts with `> `, so no text can pass for the tool's own lines. A connection that brings no frame from Slack for 5 minutes is replaced, and the catch-up after it starts from the last frame received, so a laptop sleep or a silently dead connection loses nothing (R7).
+- **Inbound:** the tool runs as a child process of the session, talks to it over MCP (stdio), and hands each message over as a `<channel source="slack-listener">` event. Each message carries its `channel`, `ts`, `thread_ts`, the author's id and name, and the time it was posted. A thread reply also carries a link and, when the thread was started by a configured person or bot of either side, typed or agent, that author and the first line of the parent; otherwise it says only that the thread was started by someone outside the configured people (R17). Every line of the quoted text starts with `> `, so no text can pass for the tool's own lines. A connection that brings no frame from Slack for 5 minutes is replaced, and the catch-up after it starts from the last frame received, so a laptop sleep or a silently dead connection loses nothing (R7). Slack sends nothing on a quiet channel that the tool can see, so a quiet channel reconnects about every 5 minutes; each reconnect costs one connection call, one history read and the replies of recently active threads.
 - **Outbound, in step 2:** the session answers with the `reply` tool. The answer goes out as the side's own bot, in the right thread. This stays switched off until the conditions in section 9 are met (D4).
 
 ## 3. The rules in brief
 
-The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. Every rule has a checker in the simulator, and its id appears in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
+The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7 and R8 at the end of every run; R6 and R11–R13 have unit tests, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
 
-| Rule | Applies  | About                                                                                           |
-| ---- | -------- | ----------------------------------------------------------------------------------------------- |
-| R1   | replaced | replaced by R10                                                                                 |
-| R2   | step 1   | delivered at most once                                                                          |
-| R3   | step 1   | text is data, never an instruction                                                              |
-| R4   | step 1   | order within a thread and at the top level                                                      |
-| R5   | step 1   | noise is not delivered                                                                          |
-| R6   | step 1   | tokens stay secret                                                                              |
-| R7   | step 1   | every allowed message arrives, including those sent during an outage                            |
-| R8   | step 1   | the instance reconnects                                                                         |
-| R9   | replaced | replaced by R16: it quoted the parent whoever wrote it                                          |
-| R10  | step 1   | the other side is heard, our own agents are not                                                 |
-| R16  | step 1   | a thread reply can be answered on its own; the parent is quoted only when its author is allowed |
-| R11  | step 2   | a post says who wrote it                                                                        |
-| R12  | step 2   | agent loops stop                                                                                |
-| R13  | step 2   | an acknowledgement is not answered                                                              |
-| R14  | removed  | was: a limit on new threads per hour (D2)                                                       |
-| R15  | step 2   | a post is made exactly once                                                                     |
+| Rule | Applies  | About                                                                                               |
+| ---- | -------- | --------------------------------------------------------------------------------------------------- |
+| R1   | replaced | replaced by R10                                                                                     |
+| R2   | step 1   | delivered at most once                                                                              |
+| R3   | step 1   | text is data, never an instruction                                                                  |
+| R4   | step 1   | order within a thread and at the top level                                                          |
+| R5   | step 1   | noise is not delivered                                                                              |
+| R6   | step 1   | tokens stay secret                                                                                  |
+| R7   | step 1   | every allowed message arrives, including those sent during an outage                                |
+| R8   | step 1   | the instance reconnects                                                                             |
+| R9   | replaced | replaced by R16: it quoted the parent whoever wrote it                                              |
+| R10  | step 1   | the other side is heard, our own agents are not                                                     |
+| R16  | replaced | replaced by R17: an own-side agent who started a thread showed as an outsider                       |
+| R17  | step 1   | a thread reply can be answered on its own; the parent is quoted when any configured author wrote it |
+| R11  | step 2   | a post says who wrote it                                                                            |
+| R12  | step 2   | agent loops stop                                                                                    |
+| R13  | step 2   | an acknowledgement is not answered                                                                  |
+| R14  | removed  | was: a limit on new threads per hour (D2)                                                           |
+| R15  | step 2   | a post is made exactly once                                                                         |
 
 R2 has one exception: if the tool crashes between writing a delivery and saving that it did, it sends the same message again after the restart, marked `possible_duplicate`. Exactly-once delivery is not possible here, because the session does not confirm what it received.
 
@@ -83,7 +84,7 @@ The steps for creating the app are in [`slack-app.md`](slack-app.md), written so
 
 - **Pure core:** one function, `step(state, event, now)`, which returns the new state and the effects to run. It has no I/O, no clock, no randomness and no `await`. Everything that happens outside is an event; everything the core asks for is an effect. Slack, the clock, the session and the state file live in a thin shell.
 - **Seeded simulator:** `src/sim` runs the core against a fake Slack with faults drawn from a seed: duplicate, late and re-sent envelopes, disconnects, crashes between effects, failing API calls and a failing session. fast-check drives the choices and shrinks a failure to the shortest failing trace.
-- **Checked after every step:** every rule is checked after every step. Coverage counters must all be above zero, so that the important cases really occur.
+- **Checked after every step:** the safety rules are checked after every step, and the progress rules (R7, R8) at the end of every run. Coverage counters must all be above zero, so that the important cases really occur.
 - **Controls:** one build that delivers nothing and one that delivers everything; the checkers must fail on both, or a green run could be empty.
 - **Kept scenarios:** every bug the simulator found stays as a fixed example test in `src/core.spec.ts`.
 - **What the numbered rules are for:** they fix what we want. The builder does not rewrite them to make a test pass; a rule that looks wrong is raised, and its replacement gets a new id.
@@ -92,17 +93,17 @@ What the method gave and what it cost is in the README: [Method and what it gave
 
 ## 8. What is built, and what is not yet
 
-| Part                                                | State       | Note                                                                                                                                                                       |
-| --------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RULES.md`                                          | done        | Updated with Greg's decisions of 2026-11-17.                                                                                                                               |
-| Core and message format                             | done        | Pure functions, no I/O.                                                                                                                                                    |
-| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 31 tests pass. Now also models laptop sleep and slow, failing API calls.                                              |
-| Shell: Socket Mode, MCP stdio, 1Password, lock file | done        | `--check` passed all three checks: bot token, reading #berek-agent-lock, Socket Mode token.                                                                                |
-| Greg's Slack app                                    | done        | Created from the manifest in [`slack-app.md`](slack-app.md).                                                                                                               |
-| Live dry run                                        | in progress | Running against a throwaway session; `bob-check` is not restarted yet.                                                                                                     |
-| Live proof on `bob-check`                           | open        | Follows the dry run.                                                                                                                                                       |
-| Step 2: the `reply` tool                            | planned     | Switches on once step 1 has its live proof (D4).                                                                                                                           |
-| PR #1                                               | open        | The first independent review found three blocking problems (a silent dead connection, a stale catch-up answer, an unchecked thread parent); all fixed, under review again. |
+| Part                                                | State       | Note                                                                                                                          |
+| --------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `RULES.md`                                          | done        | Updated with Greg's decisions of 2026-11-17.                                                                                  |
+| Core and message format                             | done        | Pure functions, no I/O.                                                                                                       |
+| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 31 tests pass. Now also models laptop sleep and slow, failing API calls. |
+| Shell: Socket Mode, MCP stdio, 1Password, lock file | done        | `--check` passed all three checks: bot token, reading #berek-agent-lock, Socket Mode token.                                   |
+| Greg's Slack app                                    | done        | Created from the manifest in [`slack-app.md`](slack-app.md).                                                                  |
+| Live dry run                                        | in progress | Running against a throwaway session; `bob-check` is not restarted yet.                                                        |
+| Live proof on `bob-check`                           | open        | Follows the dry run.                                                                                                          |
+| Step 2: the `reply` tool                            | planned     | Switches on once step 1 has its live proof (D4).                                                                              |
+| PR #1                                               | merged      | The first independent review found three blocking problems; all fixed, accepted on the second round, CI green.                |
 
 ## 9. Decisions
 

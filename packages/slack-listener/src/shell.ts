@@ -12,7 +12,7 @@ import { Data, Effect } from "effect";
 import type { ListenerConfig } from "./config.ts";
 import {
   initialState,
-  senderAllowed,
+  configuredAuthor,
   step,
   type CoreEffect,
   type CoreEvent,
@@ -316,7 +316,7 @@ export class Shell {
               message === null
                 ? null
                 : {
-                    allowed: senderAllowed(this.config.core, message),
+                    allowed: configuredAuthor(this.config.core, message),
                     authorId: message.user ?? "",
                     line: firstLine(message.text ?? ""),
                   },
