@@ -158,6 +158,12 @@ describe("simulation runtime: one seed, one run", () => {
         throw new Error("run failed");
       }),
     ).rejects.toThrow("run failed");
+    await expect(
+      withTripwire(async () => {
+        await Promise.resolve();
+        throw new Error("run rejected");
+      }),
+    ).rejects.toThrow("run rejected");
     expect([
       globalThis.setTimeout,
       globalThis.setInterval,
