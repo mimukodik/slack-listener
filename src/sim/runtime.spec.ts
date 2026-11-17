@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Random, Schedule } from "effect";
+import { Clock, Duration, Effect, Fiber, Random, Schedule } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { settle, withTripwire } from "./host.ts";
@@ -337,10 +337,62 @@ describe("simulation runtime: one seed, one run", () => {
         yield* Effect.sleep(Duration.millis(1500));
         read.push(yield* Clock.currentTimeMillis);
         read.push(Number((yield* Clock.currentTimeNanos) / 1_000_000n));
+        const clock = yield* Clock.Clock;
+        read.push(Number(clock.monotonicTimeNanosUnsafe() / 1_000_000n));
         read.push(runtime.nowMs);
       }),
     );
     expect((await runtime.run(limits, settle)).kind).toBe("done");
-    expect(read).toEqual([1500, 1500, 1500]);
+    expect(read).toEqual([1500, 1500, 1500, 1500]);
+  });
+
+  it("forked fibers that never wait are preempted by seeded budgets", async () => {
+    // The parent only forks and joins, so every busy turn is a task the
+    // runtime runs, with the budget it picks for that task.
+    const forked = (log: string[]) => {
+      const busy = (id: string) =>
+        Effect.forEach(
+          Array.from({ length: 1000 }, (_, i) => i),
+          () => Effect.sync(() => log.push(id)),
+          { discard: true },
+        );
+      return Effect.gen(function* () {
+        const a = yield* Effect.forkChild(busy("a"));
+        const b = yield* Effect.forkChild(busy("b"));
+        yield* Fiber.join(a);
+        yield* Fiber.join(b);
+      });
+    };
+    const orders = new Set<string>();
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const runtime = new SimRuntime(seed);
+      const log: string[] = [];
+      runtime.start(forked(log));
+      expect((await runtime.run(limits, settle)).kind).toBe("done");
+      orders.add(log.join(""));
+    }
+    // Measured: 18 distinct orders; 2 with a fixed budget per task.
+    expect(orders.size).toBeGreaterThan(5);
+  });
+
+  it("a crashed process woken from outside stops the run", async () => {
+    const runtime = new SimRuntime(1);
+    // Breaks the rule on purpose: a world timer answers the process.
+    runtime.start(
+      Effect.callback<void>((resume) => {
+        runtime.at(2000, () => resume(Effect.void), "world");
+      }).pipe(Effect.andThen(Effect.yieldNow)),
+    );
+    runtime.at(
+      1000,
+      () => {
+        runtime.crash();
+        runtime.start(Effect.sleep(Duration.seconds(5)));
+      },
+      "world",
+    );
+    await expect(runtime.run(limits, settle)).rejects.toThrow(
+      "a task of crashed process 1",
+    );
   });
 });

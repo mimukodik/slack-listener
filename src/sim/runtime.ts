@@ -147,7 +147,11 @@ export class SimRuntime {
   }
 
   // A process crash: its tasks and timers vanish and no finalizer runs, as
-  // when the operating system kills it. What it wrote elsewhere stays.
+  // when the operating system kills it. What it wrote elsewhere stays. The
+  // fiber itself cannot be stopped: whatever resumes it from outside the
+  // runtime, a world timer or a promise settled in the same task as the
+  // crash, runs its code; that code is caught only when it next schedules a
+  // task. Fakes therefore answer through timers of the process that asked.
   crash(): void {
     const epoch = this.epochValue;
     assert(this.fiberCurrent !== null, "crash with no process running");
