@@ -1,101 +1,58 @@
 # slack-listener
 
-Listens to one Slack channel and pushes each message into the Claude Code session
-that started it, so no session has to poll. It reads only; it never posts.
-`RULES.md` holds the numbered rules it is built and tested against.
+Listens to one Slack channel and pushes each new message into the Claude Code
+session that started it, so no session has to poll. Messages arrive quoted as data,
+with author, `ts` and `thread_ts`. It reads only; it does not post yet.
 
-## What reaches the session
+Magyarul: [README.hu.md](README.hu.md).
 
-A message from one of the configured people or bots in the watched channel arrives as
-one channel event: author id and name, `ts`, `thread_ts`, the posting time, and for a
-thread reply the parent's first line and a link. The text is quoted as data from that
-sender, never as an instruction. A real edit arrives once as `kind=edit`. Deletes,
-joins, other channels, unknown senders and the own side's agent posts are dropped.
+- [`RULES.md`](RULES.md): the numbered rules, the source of truth for behaviour.
+- Specification: [English](docs/en/specification.md),
+  [magyar](docs/hu/specifikacio.md).
+- Creating your own Slack app and config: [English](docs/en/slack-app.md),
+  [magyar](docs/hu/slack-app.md).
 
-Sides: each instance has an own side (you, and agents posting as you) and an other
-side. Everything the other side posts is delivered, typed or agent. From the own side
-only typed posts are delivered: a post carrying an app id is treated as an agent post.
+## Run it
 
-## Set it up (one instance per person)
+One instance per person, each with its own Slack app.
 
-1. Create a Slack app for your side, from a manifest:
+1. Create the app and the config file: [`docs/en/slack-app.md`](docs/en/slack-app.md).
+   Keep the config outside any repository; tokens are `op://` references only.
+2. Check the setup:
 
-   ```yaml
-   display_information:
-     name: slack-listener-<your name>
-   features:
-     bot_user:
-       display_name: slack-listener-<your name>
-       always_online: false
-   oauth_config:
-     scopes:
-       bot: [groups:history, users:read, chat:write]
-   settings:
-     event_subscriptions:
-       bot_events: [message.groups]
-     interactivity:
-       is_enabled: false
-     socket_mode_enabled: true
-     token_rotation_enabled: false
+   ```sh
+   node packages/slack-listener/src/main.ts --check --config <config.json>
    ```
 
-   `groups:history` reads the private channel, `users:read` turns user ids into
-   names, `message.groups` delivers new messages over Socket Mode. For a public
-   channel use `channels:history` and `message.channels` instead.
-   `chat:write` is there so the app is created once; the tool does not post until
-   step 2 is switched on in the configuration (RULES.md).
-
-   Install it, create an app-level token named "socket" with `connections:write`, and invite the
-   bot to the channel (`/invite @slack-listener-<your name>`). Each instance needs its own app:
-   Slack spreads one app's events across all its open connections.
-
-2. Put both tokens in 1Password and write `~/.config/slack-listener/config.json`:
-
-   ```json
-   {
-     "channel": "C0000000000",
-     "channelName": "my-channel",
-     "ownPeople": ["U0000000001"],
-     "otherPeople": ["U0000000002"],
-     "otherBots": [],
-     "tokens": {
-       "bot": "op://<vault>/<item>/bot_token",
-       "app": "op://<vault>/<item>/app_token"
-     }
-   }
-   ```
-
-   Token fields take `op://` references only; the tool reads them with `op read`
-   and never prints or stores them. State goes to `~/.local/state/slack-listener/`.
-
-3. Check it: `node packages/slack-listener/src/main.ts --check` reports the bot
-   token, channel membership and the Socket Mode token.
-
-4. Write `~/.config/slack-listener/mcp.json`, outside any project so that no other
-   session starts a second listener:
+3. Write an `mcp.json` outside any project, so that no other session starts a
+   second listener:
 
    ```json
    {
      "mcpServers": {
        "slack-listener": {
          "command": "node",
-         "args": ["<checkout>/packages/slack-listener/src/main.ts"]
+         "args": [
+           "<checkout>/packages/slack-listener/src/main.ts",
+           "--config",
+           "<config.json>"
+         ]
        }
      }
    }
    ```
 
-5. Start the receiving session with it:
+4. Start the receiving session with it:
 
    ```sh
-   claude --mcp-config ~/.config/slack-listener/mcp.json \
+   claude --mcp-config <mcp.json> \
      --dangerously-load-development-channels server:slack-listener
    ```
 
-   Channels are a research preview: interactive sessions only, and a confirmation
-   prompt at start. A lock file refuses a second listener on the same channel.
-   `--demo` instead of the config sends one sample event without Slack, to try the
-   route.
+   Channels are a research preview: interactive sessions only, with a
+   confirmation prompt at start. A lock file refuses a second listener on the
+   same channel. `--demo` in place of `--config` sends one sample event without
+   Slack, to try the route.
 
 ## What it trusts
 
@@ -107,23 +64,28 @@ whoever started it, and it relays no permission prompts.
 ## Method and what it gave
 
 The core is a pure `step(state, event, now)`; the shell runs its effects (Slack,
-timers, the session, the state file). `src/sim` runs the core against a fake Slack
-with seeded faults: duplicates, late and re-sent envelopes, disconnects, crashes
-between effects, failing API calls and sessions. fast-check drives the choices and
-shrinks a failure to a short trace. Every rule is checked after every step, coverage
-counters must all be non-zero, and two controls (a build that delivers nothing, a
-build that delivers everything) must fail.
+timers, the session, the state file). `src/sim` runs the core against a fake
+Slack with seeded faults, fast-check drives the choices and shrinks failures,
+every rule is checked after every step, and two controls (a build that delivers
+nothing, a build that delivers everything) must fail.
 
 - Gave: four real core bugs found before any live run, each now a kept scenario
-  test in `src/core.spec.ts` (an edit lost to a crash during catch-up, out-of-order
-  release, an older edit after a newer one, a late redelivery out of order).
-- Gave: one hard limit made explicit (reply edits during a gap; RULES.md, out of
-  scope) instead of a silent gap.
+  test in `src/core.spec.ts` (an edit lost to a crash during catch-up,
+  out-of-order release, an older edit after a newer one, a late redelivery out
+  of order).
+- Gave: one hard limit made explicit (reply edits during a gap; RULES.md, out
+  of scope) instead of a silent gap.
 - Cost: the fake Slack is a second model to keep honest; one correction so far
-  (deleted thread parents stay as tombstones), and it is checked only against the
-  Slack docs until recorded envelopes replace guesses.
-- Cost: about a third of the build time went to the simulator and oracle, and one
-  of the finds was the oracle's own bug.
-- Not used: TLA+ (the fast-check model of two settling instances covers step 2's
-  one concurrency question) and mutation testing (wanted; the two controls are its
-  cheap stand-in).
+  (deleted thread parents stay as tombstones), checked only against the Slack
+  docs until recorded envelopes replace guesses.
+- Cost: about a third of the build time went to the simulator and oracle, and
+  one of the finds was the oracle's own bug.
+- Not used: TLA+ (the fast-check model of two settling instances covers step
+  2's one concurrency question) and mutation testing (wanted; the two controls
+  are its cheap stand-in).
+
+## Changing behaviour
+
+A change to behaviour updates `RULES.md` and both specifications in the same
+pull request. A changed rule gets a new id; a removed id is not reused. The docs
+exist in English and Hungarian; if they differ, the English one is right.
