@@ -2,7 +2,7 @@ Magyarul: [slack-app.md](../hu/slack-app.md)
 
 # Creating the Slack app
 
-Each person needs their own app. Greg and eggp both follow these steps. eggp puts his own name where it says `greg`: in the app name, the bot name and the 1Password item.
+Each person runs their own instance and needs their own app. Put your own name where it says `<name>`: in the app name, the bot name and the 1Password item.
 
 Never paste a token anywhere: not in a chat, a file or the configuration. The tool reads the tokens from 1Password with `op read`.
 
@@ -10,14 +10,14 @@ Never paste a token anywhere: not in a chat, a file or the configuration. The to
 
 api.slack.com/apps → Create New App → From a manifest → choose the workspace → paste this manifest → Create.
 
-This is the manifest Greg created his app with. eggp puts his own name in place of Greg's in both name fields.
+Replace `<name>` in both name fields.
 
 ```yaml
 display_information:
-  name: slack-listener (Greg)
+  name: slack-listener (<name>)
 features:
   bot_user:
-    display_name: slack-listener-greg
+    display_name: slack-listener-<name>
     always_online: false
 oauth_config:
   scopes:
@@ -46,17 +46,17 @@ Install to Workspace. The OAuth & Permissions page then shows the Bot User OAuth
 
 ## 4. Invite the bot to the channel
 
-In #berek-agent-lock:
+In the channel to watch:
 
 ```text
-/invite @slack-listener-greg
+/invite @slack-listener-<name>
 ```
 
-eggp uses his own bot's name. In a private channel the bot receives events and history only as a member.
+In a private channel the bot receives events and history only as a member.
 
 ## 5. Tokens into 1Password
 
-In the `berek` vault, create an item named "slack-listener greg" (eggp: "slack-listener <his name>") with two fields:
+In a 1Password vault of your choice, create an item named "slack-listener <name>" with two fields:
 
 - `bot_token`: the `xoxb-…` token from step 3;
 - `app_token`: the `xapp-…` token from step 2.
@@ -77,18 +77,18 @@ Slack spreads one app's events across all of that app's open connections. If two
 
 ## Afterwards
 
-Write the instance configuration, for example to `~/.config/slack-listener/config.json`. Put the real user ids in place of the placeholders: `ownPeople` is your side, `otherPeople` the person on the other side. The token fields take `op://` references only.
+Write the instance configuration, for example to `~/.config/slack-listener/config.json`. Put the real user ids in place of the placeholders: `ownPeople` is your side, `otherPeople` the people on the other side. The token fields take `op://` references only.
 
 ```json
 {
   "channel": "C0000000000",
-  "channelName": "berek-agent-lock",
+  "channelName": "coordination",
   "ownPeople": ["U0000000001"],
   "otherPeople": ["U0000000002"],
   "otherBots": [],
   "tokens": {
-    "bot": "op://berek/slack-listener greg/bot_token",
-    "app": "op://berek/slack-listener greg/app_token"
+    "bot": "op://<vault>/slack-listener <name>/bot_token",
+    "app": "op://<vault>/slack-listener <name>/app_token"
   }
 }
 ```
@@ -96,7 +96,7 @@ Write the instance configuration, for example to `~/.config/slack-listener/confi
 Check it from the repository root:
 
 ```sh
-node packages/slack-listener/src/main.ts --check --config <path>
+node src/main.ts --check --config <path>
 ```
 
 `--check` checks three things: the bot token, that the bot can read the channel, and the Socket Mode token.

@@ -1,15 +1,16 @@
 # Rules for slack-listener
 
-Written 2026-11-17 by the slack-listener lane (BER-2169) before any code, from bob2's
-brief and Greg's additions. bob2 approves changes to this file; a change goes to Greg
-only if it widens who can wake a session, lets the tool speak where it could not
-before, or weakens R3 or R6 (Greg, 2026-11-17, via bob2). The builder does not edit it
-without that approval. A rule that looks wrong is raised, and its replacement gets a
-new id. Ids are never reused; a replaced rule stays, marked replaced.
+Written 2026-11-17 before any code. These rules are the source of truth for what the
+tool does; the code and the simulator follow them. A change to this file is approved
+by the maintainer, and needs the owner's explicit approval when it widens who can wake
+a session, lets the tool speak where it could not before, or weakens R3 or R6. A rule
+that looks wrong is raised, and its replacement gets a new id. Ids are never reused; a
+replaced rule stays, marked replaced. Why each rule changed is in
+[DECISIONS.md](DECISIONS.md).
 
-The channel is where two coordinators, Greg's and eggp's, talk about the work in
-flight. Most messages are agent to agent, in both directions; a person typing is the
-exception.
+The channel is where two sides' coordinating agents talk about the work in flight. Each
+side runs its own instance with its own Slack app. Most messages are agent to agent, in
+both directions; a person typing is the exception.
 
 ## Terms
 
@@ -103,8 +104,8 @@ posting stays off until `posting: true` is set in the configuration.
 - **R13. An acknowledgement is not answered.** A post can be marked "no reply needed".
   It is delivered as information, and the tool refuses an agent reply to it. Only a
   later message in that thread that asks for a reply opens it again.
-- **R14. Removed 2026-11-17.** It rationed new threads per hour. Greg: limiting the
-  rate of communication is not the right lever; R12 stops loops instead. The id is not
+- **R14. Removed 2026-11-17.** It rationed new threads per hour. Limiting the rate
+  of communication is not the right lever; R12 stops loops instead. The id is not
   reused.
 - **R15. A post is made once.** A reply the tool accepted appears in the thread
   exactly once. When Slack's answer is lost, the tool checks the thread before trying
