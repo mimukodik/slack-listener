@@ -10,7 +10,7 @@ import {
   type Saved,
   type State,
 } from "./core.ts";
-import { renderDelivery } from "./format.ts";
+import { parentFrom, renderDelivery } from "./format.ts";
 import { simConfig, simStartMs } from "./sim/simulator.ts";
 import { people, watchedChannel } from "./sim/slack-fake.ts";
 import type { SlackMessage } from "./slack.ts";
@@ -534,5 +534,24 @@ describe("R17: whose thread parent is quoted", () => {
         bot_id: "BX",
       }),
     ).toBe(false);
+  });
+});
+
+describe("R17: the parent a reply carries", () => {
+  it("is shown for our own agent's thread and hidden for a stranger's", () => {
+    const config = simConfig();
+    const own = parentFrom(
+      config,
+      post(1, people.own, {
+        app_id: "ACLAUDE01",
+        text: "\n\nstatus line\nmore",
+      }),
+    );
+    expect(own).toEqual({
+      allowed: true,
+      authorId: people.own,
+      line: "status line",
+    });
+    expect(parentFrom(config, post(1, people.stranger)).allowed).toBe(false);
   });
 });

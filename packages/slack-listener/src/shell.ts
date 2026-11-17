@@ -12,7 +12,6 @@ import { Data, Effect } from "effect";
 import type { ListenerConfig } from "./config.ts";
 import {
   initialState,
-  configuredAuthor,
   step,
   type CoreEffect,
   type CoreEvent,
@@ -21,7 +20,13 @@ import {
   type State,
   type TimerName,
 } from "./core.ts";
-import { firstLine, renderDelivery, type ParentInfo } from "./format.ts";
+import {
+  firstLine,
+  parentFrom,
+  renderDelivery,
+  type Parent,
+  type ParentInfo,
+} from "./format.ts";
 import type { ChannelServer } from "./mcp.ts";
 import { redact, type SlackApi } from "./slack-api.ts";
 import { msToTs, type SlackMessage } from "./slack.ts";
@@ -68,12 +73,6 @@ interface SocketEnvelope {
   envelope_id?: string;
   reason?: string;
   payload?: { event?: SlackMessage };
-}
-
-interface Parent {
-  allowed: boolean;
-  authorId: string;
-  line: string;
 }
 
 export class Shell {
@@ -313,13 +312,7 @@ export class Shell {
         ? Effect.succeed(cached)
         : this.api.parentMessage(delivery.channel, delivery.threadTs).pipe(
             Effect.map((message): Parent | null =>
-              message === null
-                ? null
-                : {
-                    allowed: configuredAuthor(this.config.core, message),
-                    authorId: message.user ?? "",
-                    line: firstLine(message.text ?? ""),
-                  },
+              message === null ? null : parentFrom(this.config.core, message),
             ),
             Effect.tap((parent) =>
               Effect.sync(() => {

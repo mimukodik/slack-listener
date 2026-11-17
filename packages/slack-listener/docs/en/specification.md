@@ -84,7 +84,7 @@ The steps for creating the app are in [`slack-app.md`](slack-app.md), written so
 
 - **Pure core:** one function, `step(state, event, now)`, which returns the new state and the effects to run. It has no I/O, no clock, no randomness and no `await`. Everything that happens outside is an event; everything the core asks for is an effect. Slack, the clock, the session and the state file live in a thin shell.
 - **Seeded simulator:** `src/sim` runs the core against a fake Slack with faults drawn from a seed: duplicate, late and re-sent envelopes, disconnects, crashes between effects, failing API calls and a failing session. fast-check drives the choices and shrinks a failure to the shortest failing trace.
-- **Checked after every step:** the safety rules are checked after every step, and the progress rules (R7, R8) at the end of every run. Coverage counters must all be above zero, so that the important cases really occur.
+- **What is checked, and when:** the safety rules are checked after every step, and the progress rules (R7, R8) at the end of every run. Coverage counters must all be above zero, so that the important cases really occur.
 - **Controls:** one build that delivers nothing and one that delivers everything; the checkers must fail on both, or a green run could be empty.
 - **Kept scenarios:** every bug the simulator found stays as a fixed example test in `src/core.spec.ts`.
 - **What the numbered rules are for:** they fix what we want. The builder does not rewrite them to make a test pass; a rule that looks wrong is raised, and its replacement gets a new id.
@@ -97,7 +97,7 @@ What the method gave and what it cost is in the README: [Method and what it gave
 | --------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `RULES.md`                                          | done        | Updated with Greg's decisions of 2026-11-17.                                                                                  |
 | Core and message format                             | done        | Pure functions, no I/O.                                                                                                       |
-| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 31 tests pass. Now also models laptop sleep and slow, failing API calls. |
+| Simulator                                           | done        | 3,000 seeds × 120 actions and 300 × 600, no failure; 33 tests pass. Now also models laptop sleep and slow, failing API calls. |
 | Shell: Socket Mode, MCP stdio, 1Password, lock file | done        | `--check` passed all three checks: bot token, reading #berek-agent-lock, Socket Mode token.                                   |
 | Greg's Slack app                                    | done        | Created from the manifest in [`slack-app.md`](slack-app.md).                                                                  |
 | Live dry run                                        | in progress | Running against a throwaway session; `bob-check` is not restarted yet.                                                        |

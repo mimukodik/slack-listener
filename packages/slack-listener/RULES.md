@@ -1,8 +1,11 @@
 # Rules for slack-listener
 
 Written 2026-11-17 by the slack-listener lane (BER-2169) before any code, from bob2's
-brief and Greg's additions. Greg approves this file; the builder does not edit it. A
-rule that looks wrong is raised, and its replacement gets a new id. Ids are never
+brief and Greg's additions. bob2 approves changes to this file; a change goes to Greg
+only if it widens who can wake a session, lets the tool speak where it could not
+before, or weakens R3 or R6 (Greg, 2026-11-17, via bob2). The builder does not edit it
+without that approval. A rule that looks wrong is raised, and its replacement gets a
+new id. Ids are never
 reused; a replaced rule stays, marked replaced.
 
 The channel is where two coordinators, Greg's and eggp's, talk about the work in
@@ -76,6 +79,8 @@ exception.
   author's id and name and the first line of the parent (up to 120 characters);
   otherwise it says only that the thread was started by someone outside the
   configured people. Quoting a configured author wakes no one, so R10 is not affected.
+  R17 trusts who posted, not where the text came from: an own-side post that relays
+  someone else's words verbatim can show up to 120 characters of them as the parent.
   The receiving session can then answer in the right thread without looking anything
   up.
 
