@@ -31,6 +31,8 @@ export async function runPool<T extends Task>(
   tasks: readonly T[],
   workers: number,
 ): Promise<Answer<T>[]> {
+  // With no task no worker starts, and nothing would ever settle the wait.
+  if (tasks.length === 0) return [];
   const answers: (Answer<T> | undefined)[] = tasks.map(() => undefined);
   const started: Worker[] = [];
   let next = 0;
