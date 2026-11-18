@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import { runExhaustive } from "./exhaustive.ts";
+import { runSeeds } from "./run.ts";
 import { runSimulation } from "./simulator.ts";
 import { type Action, World, alphabet } from "./world.ts";
 
@@ -45,6 +46,16 @@ describe("simulator", () => {
     await runSimulation({ seed: 18, actions: 30, trace: differentTrace });
     expect(differentTrace).not.toEqual(firstTrace);
   });
+});
+
+describe("sampled pass", () => {
+  // Split across threads, the seeds must fail as a single thread's do, in
+  // seed order. Two workers force the split on any runner.
+  it("the seeds split across workers give the single-threaded failures", async () => {
+    const single = await runSeeds(60, 40);
+    const split = await runSeeds(60, 40, 2);
+    expect(split).toEqual(single);
+  }, 120_000);
 });
 
 describe("two controls on the observations", () => {
