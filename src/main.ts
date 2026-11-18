@@ -24,7 +24,7 @@ import {
 import { channelInstructions, renderDelivery } from "./format.ts";
 import { makeLog, type Log } from "./log.ts";
 import { ChannelServer } from "./mcp.ts";
-import { readSaved, runShell } from "./shell.ts";
+import { runListener } from "./program.ts";
 import { redact, SlackApi } from "./slack-api.ts";
 import { msToTs } from "./slack.ts";
 
@@ -220,17 +220,7 @@ function listen(log: Log) {
       atBoundary(() => takeLock(config.lockFile)),
       (release) => Effect.sync(release),
     );
-    const sink = yield* ChannelServer.make({
-      name: config.serverName,
-      version: "0.0.0",
-      instructions: channelInstructions,
-      log,
-    });
-    const saved = yield* readSaved(config.stateFile).pipe(
-      Effect.mapError((error) => new Fatal({ reason: error.reason })),
-    );
-    yield* log(`watching ${config.core.channel} as ${config.serverName}`);
-    yield* runShell(config, { api, sink, log }, saved).pipe(
+    yield* runListener(config, tokens, log).pipe(
       Effect.mapError((error) => new Fatal({ reason: error.reason })),
     );
   });

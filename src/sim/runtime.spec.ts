@@ -123,6 +123,45 @@ describe("simulation runtime: one seed, one run", () => {
     expect(log).toEqual(["second at 1000"]);
   });
 
+  it("laptop sleep parks process timers and ready tasks while the world continues", async () => {
+    const runtime = new SimRuntime(
+      1,
+      Array.from({ length: 1000 }, () => 0),
+    );
+    const log: string[] = [];
+    runtime.start(
+      Effect.sleep(5000).pipe(
+        Effect.andThen(Effect.sync(() => log.push(`process ${runtime.nowMs}`))),
+      ),
+    );
+    const cancel = runtime.at(5000, () => log.push("canceled callback ran"));
+    runtime.at(1000, () => runtime.pause(10_000), "world");
+    runtime.at(
+      3000,
+      () => {
+        cancel();
+        log.push(`world ${runtime.nowMs}`);
+      },
+      "world",
+    );
+    expect((await runtime.run(limits, settle)).kind).toBe("done");
+    expect(log).toEqual(["world 3000", "process 11000"]);
+
+    const ready = new SimRuntime(
+      1,
+      Array.from({ length: 1000 }, () => 0),
+    );
+    const parked: number[] = [];
+    ready.start(
+      Effect.yieldNow.pipe(
+        Effect.andThen(Effect.sync(() => parked.push(ready.nowMs))),
+      ),
+    );
+    ready.pause(10_000);
+    expect((await ready.run(limits, settle)).kind).toBe("done");
+    expect(parked).toEqual([10_000]);
+  });
+
   it("reports a process that waits for nothing as stuck", async () => {
     const runtime = new SimRuntime(1);
     runtime.start(Effect.never);

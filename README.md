@@ -10,7 +10,7 @@ A Claude Code channel server that wakes a session when someone posts in a Slack 
 - **Data, not instructions.** Every line of a message is quoted with `> `, so sender text cannot pass for the listener's own framing. The listener never declares the permission relay.
 - **Nothing lost.** A disconnect, a sleeping laptop or a crash is followed by a catch-up from Slack's history. A message the session may already have seen comes again marked `possible_duplicate`.
 - **Reads only.** Answering in a thread through the tool is planned (RULES.md, step 2) and switched off.
-- **Checked by simulation.** A pure core runs against a fake Slack with seeded faults, and an exhaustive pass covers every sequence of up to 7 actions (87,796 sequences, no violation).
+- **Checked by simulation.** The production Effect program runs on a seeded fake world, with actual session output and Slack acknowledgements checked. A bounded exhaustive pass replays every valid action prefix.
 
 ## Run it
 

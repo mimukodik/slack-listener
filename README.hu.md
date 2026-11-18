@@ -10,7 +10,7 @@ Claude Code channel-szerver, amely felébreszt egy munkamenetet, amikor valaki �
 - **Adat, nem utasítás.** Az üzenet minden sora `> `-vel idézve érkezik, így a küldő szövege nem adhatja ki magát a figyelő saját keretének. A figyelő sosem jelenti be a permission relayt.
 - **Semmi nem vész el.** Kapcsolatszakadás, alvó laptop vagy összeomlás után a Slack előzményeiből felzárkózik. Ha a munkamenet egy üzenetet talán már látott, az `possible_duplicate` jelöléssel jön újra.
 - **Csak olvas.** A szálbeli válasz az eszközön keresztül tervezett (RULES.md, 2. lépés), és ki van kapcsolva.
-- **Szimulációval ellenőrzött.** A tiszta mag seedelt hibákkal futó hamis Slack ellen fut, és egy teljes bejárás minden legfeljebb 7 lépéses sorozatot lefed (87 796 sorozat, hiba nélkül).
+- **Szimulációval ellenőrzött.** Az éles Effect program seedelt hamis külvilágon fut; az ellenőrzők a munkamenet valódi kimenetét és a Slack nyugtáit vizsgálják. A korlátos teljes bejárás minden érvényes lépéssorozat-előtagot újrajátszik.
 
 ## Futtatás
 
