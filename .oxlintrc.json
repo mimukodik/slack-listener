@@ -145,6 +145,16 @@
             "object": "globalThis",
             "property": "Date",
             "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "process",
+            "message": "world-through-services: the program reaches the world through Effect services."
+          },
+          {
+            "object": "globalThis",
+            "property": "WebSocket",
+            "message": "world-through-services: the program reaches the world through Effect services."
           }
         ],
         "no-restricted-imports": [
@@ -278,6 +288,16 @@
             "object": "globalThis",
             "property": "Date",
             "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "process",
+            "message": "world-through-services: the program reaches the world through Effect services."
+          },
+          {
+            "object": "globalThis",
+            "property": "WebSocket",
+            "message": "world-through-services: the program reaches the world through Effect services."
           }
         ],
         "no-restricted-imports": [

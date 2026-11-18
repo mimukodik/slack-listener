@@ -11,6 +11,7 @@
 // One fiber steps the core, one event at a time; everything that waits on the
 // world runs in a fiber of its own and comes back as an event.
 import {
+  Cause,
   Clock,
   Data,
   Deferred,
@@ -254,6 +255,21 @@ class Enrichment {
   }
 }
 
+// A timer is a sleeping fiber; setting one of the same name interrupts the
+// one before, so only the latest fires.
+export function replaceTimer(
+  timers: FiberMap.FiberMap<TimerName>,
+  name: TimerName,
+  delayMs: number,
+  fire: Effect.Effect<void>,
+): Effect.Effect<void> {
+  return FiberMap.run(
+    timers,
+    name,
+    Effect.sleep(Math.max(0, delayMs)).pipe(Effect.andThen(fire)),
+  ).pipe(Effect.asVoid);
+}
+
 // Runs the listener until the session closes stdin. Fails with ShellStopped
 // when it must stop; closing its scope ends every fiber and the socket.
 export function runShell(
@@ -446,12 +462,11 @@ export function runShell(
       const setTimer = (name: TimerName, atMs: number): Effect.Effect<void> =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          yield* FiberMap.run(
+          yield* replaceTimer(
             timers,
             name,
-            Effect.sleep(Math.max(0, atMs - now)).pipe(
-              Effect.andThen(dispatch({ type: "timer", name })),
-            ),
+            atMs - now,
+            dispatch({ type: "timer", name }),
           );
         });
 
@@ -533,9 +548,25 @@ export function runShell(
         for (const effect of result.effects) yield* run(effect);
       });
 
+      // A fiber that died stops the listener loudly, as an unhandled
+      // rejection did before; replacing a timer or a connection is no death.
+      const crashed: Effect.Effect<never, ShellStopped> = Effect.raceFirst(
+        FiberSet.join(tasks),
+        Effect.raceFirst(FiberHandle.join(connection), FiberMap.join(timers)),
+      ).pipe(
+        Effect.andThen(Effect.never),
+        Effect.catchCause((cause) =>
+          Effect.fail(
+            new ShellStopped({
+              reason: `a fiber of the shell stopped: ${message(Cause.squash(cause))}`,
+            }),
+          ),
+        ),
+      );
+
       yield* dispatch({ type: "started", saved });
       yield* Effect.raceFirst(
-        Effect.forever(stepOnce),
+        Effect.raceFirst(Effect.forever(stepOnce), crashed),
         Deferred.await(sink.closed).pipe(
           Effect.andThen(log("stopping: the session closed stdin")),
         ),

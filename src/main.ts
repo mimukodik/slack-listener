@@ -160,7 +160,11 @@ function demo(log: Log) {
       instructions: channelInstructions,
       log,
     });
-    yield* Deferred.await(sink.initialized);
+    const initialized = yield* Effect.raceFirst(
+      Deferred.await(sink.initialized).pipe(Effect.as(true)),
+      Deferred.await(sink.closed).pipe(Effect.as(false)),
+    );
+    if (!initialized) return;
     yield* Effect.sleep("3 seconds");
     const nowMs = yield* Clock.currentTimeMillis;
     const rendered = renderDelivery(
