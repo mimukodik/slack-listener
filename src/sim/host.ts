@@ -1,18 +1,79 @@
 // The simulator's only contact with the real host. Everything else in the
 // simulation runs on SimRuntime's clock and choices.
 //
-// settle lets pending promise callbacks run between simulated steps.
-// withTripwire makes any real timer during a simulated run throw, so code
-// that slips past Effect's services cannot go unnoticed
-// (PRINCIPLES.md: world-through-services, one-seed-one-run).
+// host gives the runtime a fresh macrotask to run its loop in, and a
+// synchronous drain of pending promise callbacks between simulated steps.
+// The drain is V8's microtask checkpoint, reached through a natives-syntax
+// function compiled once here; it replaces a real setImmediate per step,
+// which made the waiting, not the program, most of a run's cost (BER-2207).
+// A checkpoint inside a microtask does nothing, so every loop starts with a
+// self-test and fails by name if the drain does not drain.
+// withTripwire makes any real timer during a simulated run throw, and the
+// loop itself refuses process.nextTick, which the drain would not run, so
+// code that slips past Effect's services cannot go unnoticed
+// (PRINCIPLES.md: world-through-services, one-seed-one-run). The refusal
+// replaces only the global: code that kept its own reference to
+// process.nextTick at load would get past it. Identical seed traces show
+// nothing does today.
+import { setFlagsFromString } from "node:v8";
+import { runInThisContext } from "node:vm";
+
+import type { SimHost } from "./runtime.ts";
 
 const realSetImmediate = globalThis.setImmediate;
 
-export async function settle(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    realSetImmediate(resolve);
+// The flag stays on for the process: V8 may flush the function's bytecode and
+// parse it again, which fails without it. Only the simulator loads this file.
+setFlagsFromString("--allow-natives-syntax");
+const checkpoint = runInThisContext(
+  "(function () { %PerformMicrotaskCheckpoint(); })",
+) as () => void;
+
+function drainSelfTest(): void {
+  let drained = false;
+  void Promise.resolve().then(() => {
+    drained = true;
   });
+  checkpoint();
+  if (!drained)
+    throw new Error(
+      "simulation host: the microtask drain did not drain; the loop must start in a macrotask",
+    );
 }
+
+function refuseNextTick<A>(run: () => A): A {
+  const saved = Object.getOwnPropertyDescriptor(process, "nextTick");
+  if (saved === undefined)
+    throw new Error("simulation host: process.nextTick is not an own property");
+  Object.defineProperty(process, "nextTick", {
+    ...saved,
+    value: () => {
+      throw new Error(
+        "real process.nextTick during a simulated run; the drain does not run it",
+      );
+    },
+  });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "nextTick", saved);
+  }
+}
+
+export const host: SimHost = {
+  enter: async <A>(run: () => A) =>
+    new Promise<A>((resolve, reject) => {
+      realSetImmediate(() => {
+        try {
+          drainSelfTest();
+          resolve(refuseNextTick(run));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    }),
+  drain: checkpoint,
+};
 
 export type Tripped = { readonly name: string; readonly stack: string };
 

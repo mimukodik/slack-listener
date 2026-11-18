@@ -21,7 +21,7 @@ import { makeLog } from "../log.ts";
 import { runListener } from "../program.ts";
 import { compareTs, type SlackMessage } from "../slack.ts";
 import { SafetyChecker, SafetyViolation, checkProgress } from "./checker.ts";
-import { settle, withTripwire } from "./host.ts";
+import { host, withTripwire } from "./host.ts";
 import { SimRuntime } from "./runtime.ts";
 import {
   simConfig,
@@ -120,6 +120,15 @@ class WorldSocket implements Socket.WebSocketLike {
       this.world.ack(this, frame.envelope_id);
   }
 }
+
+// The exhaustive pass's alphabet: two thread starters (A by the other side,
+// B by our own agent), a reply in each (a, b), an edit of the latest message
+// (e), a disconnect lasting one action (d), a crash at the next delivery (c)
+// and a duplicate of the last envelope (u).
+export const alphabet = ["A", "B", "a", "b", "e", "d", "c", "u"] as const;
+export type Action = (typeof alphabet)[number];
+const isAction = (value: string): value is Action =>
+  (alphabet as readonly string[]).includes(value);
 
 export class World {
   readonly runtime: SimRuntime;
@@ -918,7 +927,7 @@ export class World {
         this.start();
         return this.runtime.run(
           { stepsMax: 250_000, timeMsMax: simStartMs + 48 * 60 * 60_000 },
-          settle,
+          host,
         );
       });
       if (tripped.length > 0)
@@ -952,10 +961,20 @@ export class World {
 
   // The exhaustive driver's alphabet operates on the same external world.
   // It never clones or observes a core state or runs a core effect itself.
-  async sequence(
-    sequence: string,
-  ): Promise<{ valid: boolean; result: SimResult; postedWhileDown: string[] }> {
+  // next lists the actions that would be valid one step after the sequence:
+  // the finish timer sits where a further action's timer would, so it reads
+  // the same world, and the driver runs only those (it fails loudly if one
+  // turns out invalid). This holds when every choice is 0, as the driver's
+  // tape makes it: timers due together then run in creation order, and the
+  // finish timer has the slot the further action's timer would have.
+  async sequence(sequence: string): Promise<{
+    valid: boolean;
+    next: Action[];
+    result: SimResult;
+    postedWhileDown: string[];
+  }> {
     let valid = true;
+    let next: Action[] = [];
     let a: string | null = null;
     let b: string | null = null;
     let recover = false;
@@ -981,92 +1000,91 @@ export class World {
       });
       return ts;
     };
+    const allows = (action: Action): boolean => {
+      switch (action) {
+        case "A":
+          return a === null;
+        case "B":
+          return b === null;
+        case "a":
+          return a !== null;
+        case "b":
+          return b !== null;
+        case "e":
+          return this.slack.messages.size > 0;
+        case "d":
+          return this.running && !this.outage;
+        case "c":
+          return this.running && !this.crashArmed;
+        case "u":
+          return this.lastEnvelope !== null && this.running;
+      }
+    };
+    // allows and perform must agree; perform throws if allows let through an
+    // action whose state is missing, so the two cannot drift silently.
+    const present = <T>(value: T | null | undefined, action: Action): T => {
+      if (value === null || value === undefined)
+        throw new Error(`exhaustive ${action} allowed without its state`);
+      return value;
+    };
+    const perform = (action: Action, index: number): void => {
+      switch (action) {
+        case "A":
+          a = post("other_person", undefined, "starter A");
+          break;
+        case "B":
+          b = post("own_agent", undefined, "starter B");
+          break;
+        case "a":
+          post("other_agent", present(a, "a"), `reply A ${index}`);
+          break;
+        case "b":
+          post("other_person", present(b, "b"), `reply B ${index}`);
+          break;
+        case "e": {
+          const target = present([...this.slack.messages.values()].at(-1), "e");
+          const previous = toSlack(target);
+          target.text += ` (edited ${index})`;
+          target.editedTs = this.slack.nextTs(this.now);
+          this.emit(
+            changedEvent(
+              previous,
+              toSlack(target),
+              this.slack.nextTs(this.now),
+            ),
+          );
+          break;
+        }
+        case "d":
+          this.outage = true;
+          this.socket?.close(1006);
+          recover = true;
+          break;
+        case "c":
+          this.crashArmed = true;
+          armedAge = 0;
+          break;
+        case "u": {
+          const envelope = present(this.lastEnvelope, "u");
+          this.socket?.frame({
+            type: "events_api",
+            envelope_id: envelope.id,
+            payload: { event: envelope.message },
+          });
+          break;
+        }
+      }
+    };
     for (let index = 0; index < sequence.length; index += 1) {
       const action = sequence[index];
-      if (action === undefined)
-        throw new Error("exhaustive sequence lost action");
+      if (action === undefined || !isAction(action))
+        throw new Error(`unknown exhaustive action ${action}`);
       this.schedule((index + 1) * 4000, () => {
         if (!valid) return;
         const recovering = recover;
         recover = false;
-        switch (action) {
-          case "A":
-            if (a !== null) {
-              valid = false;
-              break;
-            }
-            a = post("other_person", undefined, "starter A");
-            break;
-          case "B":
-            if (b !== null) {
-              valid = false;
-              break;
-            }
-            b = post("own_agent", undefined, "starter B");
-            break;
-          case "a":
-            if (a === null) {
-              valid = false;
-              break;
-            }
-            post("other_agent", a, `reply A ${index}`);
-            break;
-          case "b":
-            if (b === null) {
-              valid = false;
-              break;
-            }
-            post("other_person", b, `reply B ${index}`);
-            break;
-          case "e": {
-            const target = [...this.slack.messages.values()].at(-1);
-            if (target === undefined) {
-              valid = false;
-              break;
-            }
-            const previous = toSlack(target);
-            target.text += ` (edited ${index})`;
-            target.editedTs = this.slack.nextTs(this.now);
-            this.emit(
-              changedEvent(
-                previous,
-                toSlack(target),
-                this.slack.nextTs(this.now),
-              ),
-            );
-            break;
-          }
-          case "d":
-            if (!this.running || this.outage) {
-              valid = false;
-              break;
-            }
-            this.outage = true;
-            this.socket?.close(1006);
-            recover = true;
-            break;
-          case "c":
-            if (!this.running || this.crashArmed) {
-              valid = false;
-              break;
-            }
-            this.crashArmed = true;
-            armedAge = 0;
-            break;
-          case "u":
-            if (this.lastEnvelope === null || !this.running) {
-              valid = false;
-              break;
-            }
-            this.socket?.frame({
-              type: "events_api",
-              envelope_id: this.lastEnvelope.id,
-              payload: { event: this.lastEnvelope.message },
-            });
-            break;
-          default:
-            throw new Error(`unknown exhaustive action ${action}`);
-        }
+        if (allows(action)) perform(action, index);
+        else valid = false;
         if (recovering) this.outage = false;
         this.schedule(3990, () => {
           if (this.crashArmed) {
@@ -1079,10 +1097,11 @@ export class World {
       });
     }
     this.schedule((sequence.length + 1) * 4000, () => {
+      if (valid) next = alphabet.filter(allows);
       this.outage = false;
       this.finish();
     });
     const result = await this.drive();
-    return { valid, result, postedWhileDown };
+    return { valid, next, result, postedWhileDown };
   }
 }

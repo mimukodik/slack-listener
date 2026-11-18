@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { runExhaustive } from "./exhaustive.ts";
 import { runSimulation } from "./simulator.ts";
+import { type Action, World, alphabet } from "./world.ts";
 
 describe("simulator", () => {
   it("R2 R4 R5 R7 R8 R10: whole-program seeded runs keep every rule", async () => {
@@ -65,8 +66,40 @@ describe("bounded exhaustive pass", () => {
   it("R2 R7 R10 R17: no violation in any valid sequence up to 5 actions", async () => {
     const result = await runExhaustive(5);
     expect(result.violations).toEqual([]);
-    expect(result.sequences).toBeGreaterThan(1000);
+    // Counted by running every child of every prefix, before the pass ran
+    // only predicted ones; a wrong "invalid" prediction would lower it.
+    expect(result.sequences).toBe(3065);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
+  }, 120_000);
+
+  // Split across threads, the pass must give the single-threaded result,
+  // violations in the same order. Two workers force the split on any runner.
+  it("the pass split across workers gives the single-threaded result", async () => {
+    const single = await runExhaustive(5);
+    const split = await runExhaustive(5, 2);
+    expect(split).toEqual(single);
+  }, 120_000);
+
+  // The pass runs only the children a prefix predicts valid. Running every
+  // child of every valid prefix up to 3 actions must give the same sets.
+  it("a prefix predicts exactly which next actions are valid", async () => {
+    const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
+    const run = async (sequence: string) =>
+      new World({ seed: 1, faults: false, tape }).sequence(sequence);
+    const prefixes = [""];
+    let checked = 0;
+    while (prefixes.length > 0) {
+      const prefix = prefixes.pop() ?? "";
+      const parent = await run(prefix);
+      const valid: Action[] = [];
+      for (const action of alphabet)
+        if ((await run(prefix + action)).valid) valid.push(action);
+      expect(parent.next, `after "${prefix}"`).toEqual(valid);
+      checked += 1;
+      if (prefix.length < 3)
+        for (const action of valid) prefixes.push(prefix + action);
+    }
+    expect(checked).toBeGreaterThan(100);
   }, 120_000);
 });

@@ -1,7 +1,7 @@
 import { Clock, Duration, Effect, Fiber, Random, Schedule } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { settle, withTripwire } from "./host.ts";
+import { host, withTripwire } from "./host.ts";
 import { type Limits, type Outcome, SimRuntime } from "./runtime.ts";
 
 const limits: Limits = { stepsMax: 50_000, timeMsMax: 3_600_000 };
@@ -73,7 +73,7 @@ async function runSeed(seed: number, crashAtMs: number | null): Promise<Run> {
         },
         "world",
       );
-    return runtime.run(limits, settle);
+    return runtime.run(limits, host);
   });
   return {
     outcome: value.kind,
@@ -118,7 +118,7 @@ describe("simulation runtime: one seed, one run", () => {
       },
       "world",
     );
-    const outcome = await runtime.run(limits, settle);
+    const outcome = await runtime.run(limits, host);
     expect(outcome.kind).toBe("done");
     expect(log).toEqual(["second at 1000"]);
   });
@@ -144,7 +144,7 @@ describe("simulation runtime: one seed, one run", () => {
       },
       "world",
     );
-    expect((await runtime.run(limits, settle)).kind).toBe("done");
+    expect((await runtime.run(limits, host)).kind).toBe("done");
     expect(log).toEqual(["world 3000", "process 11000"]);
 
     const ready = new SimRuntime(
@@ -158,14 +158,14 @@ describe("simulation runtime: one seed, one run", () => {
       ),
     );
     ready.pause(10_000);
-    expect((await ready.run(limits, settle)).kind).toBe("done");
+    expect((await ready.run(limits, host)).kind).toBe("done");
     expect(parked).toEqual([10_000]);
   });
 
   it("reports a process that waits for nothing as stuck", async () => {
     const runtime = new SimRuntime(1);
     runtime.start(Effect.never);
-    expect((await runtime.run(limits, settle)).kind).toBe("stuck");
+    expect((await runtime.run(limits, host)).kind).toBe("stuck");
   });
 
   it("stops a run that outlives its limits", async () => {
@@ -173,7 +173,7 @@ describe("simulation runtime: one seed, one run", () => {
     runtime.start(Effect.forever(Effect.sleep(Duration.seconds(1))));
     const outcome = await runtime.run(
       { stepsMax: 1_000_000, timeMsMax: 60_000 },
-      settle,
+      host,
     );
     expect(outcome).toEqual({ kind: "limit", reason: "time" });
   });
@@ -210,6 +210,26 @@ describe("simulation runtime: one seed, one run", () => {
     ]).toEqual(saved);
   });
 
+  it("a real process.nextTick inside the program stops it", async () => {
+    const runtime = new SimRuntime(1);
+    const saved = process.nextTick;
+    runtime.start(
+      Effect.gen(function* () {
+        yield* Effect.sleep(Duration.millis(5));
+        process.nextTick(() => {});
+      }),
+    );
+    const outcome = await runtime.run(limits, host);
+    expect(outcome.kind).toBe("done");
+    if (outcome.kind === "done") {
+      expect(outcome.exit._tag).toBe("Failure");
+      expect(String(outcome.exit)).toMatch(
+        /process\.nextTick during a simulated run/,
+      );
+    }
+    expect(process.nextTick).toBe(saved);
+  });
+
   it("the tripwire catches a real timer inside the program", async () => {
     const runtime = new SimRuntime(1);
     const { value, tripped } = await withTripwire(async () => {
@@ -219,7 +239,7 @@ describe("simulation runtime: one seed, one run", () => {
           setTimeout(() => {}, 10);
         }),
       );
-      return runtime.run(limits, settle);
+      return runtime.run(limits, host);
     });
     expect(value.kind).toBe("done");
     if (value.kind === "done") expect(value.exit._tag).toBe("Failure");
@@ -239,7 +259,7 @@ describe("simulation runtime: one seed, one run", () => {
       runtime.start(
         Effect.all([1, 2, 3, 4].map(fiber), { concurrency: "unbounded" }),
       );
-      await runtime.run(limits, settle);
+      await runtime.run(limits, host);
       picksPastFirst += runtime.trace.filter((line) =>
         / task [1-9]\d*\//.test(line),
       ).length;
@@ -275,7 +295,7 @@ describe("simulation runtime: one seed, one run", () => {
       },
       "world",
     );
-    expect((await runtime.run(limits, settle)).kind).toBe("done");
+    expect((await runtime.run(limits, host)).kind).toBe("done");
     expect(log).toEqual([]);
   });
 
@@ -294,7 +314,7 @@ describe("simulation runtime: one seed, one run", () => {
       const runtime = new SimRuntime(seed, tape);
       const log: string[] = [];
       runtime.start(busyPair(log));
-      expect((await runtime.run(limits, settle)).kind).toBe("done");
+      expect((await runtime.run(limits, host)).kind).toBe("done");
       return log.join("");
     };
     const orders = new Set<string>();
@@ -335,7 +355,7 @@ describe("simulation runtime: one seed, one run", () => {
         },
         "world",
       );
-      expect((await runtime.run(limits, settle)).kind).toBe("done");
+      expect((await runtime.run(limits, host)).kind).toBe("done");
       expect(log.slice(log.indexOf("crashed") + 1), `seed ${seed}`).toEqual([]);
     }
   });
@@ -361,7 +381,7 @@ describe("simulation runtime: one seed, one run", () => {
         },
         "world",
       );
-      expect((await runtime.run(limits, settle)).kind).toBe("done");
+      expect((await runtime.run(limits, host)).kind).toBe("done");
       expect(log.slice(log.indexOf("crashed") + 1), `seed ${seed}`).toEqual([]);
     }
   });
@@ -371,7 +391,7 @@ describe("simulation runtime: one seed, one run", () => {
     runtime.start(Effect.forever(Effect.yieldNow));
     const outcome = await runtime.run(
       { stepsMax: 2_000, timeMsMax: 60_000 },
-      settle,
+      host,
     );
     expect(outcome).toEqual({ kind: "limit", reason: "steps" });
   });
@@ -389,7 +409,7 @@ describe("simulation runtime: one seed, one run", () => {
         read.push(runtime.nowMs);
       }),
     );
-    expect((await runtime.run(limits, settle)).kind).toBe("done");
+    expect((await runtime.run(limits, host)).kind).toBe("done");
     expect(read).toEqual([1500, 1500, 1500, 1500]);
   });
 
@@ -415,7 +435,7 @@ describe("simulation runtime: one seed, one run", () => {
       const runtime = new SimRuntime(seed);
       const log: string[] = [];
       runtime.start(forked(log));
-      expect((await runtime.run(limits, settle)).kind).toBe("done");
+      expect((await runtime.run(limits, host)).kind).toBe("done");
       orders.add(log.join(""));
     }
     // Measured: 18 distinct orders; 2 with a fixed budget per task.
@@ -438,7 +458,7 @@ describe("simulation runtime: one seed, one run", () => {
       },
       "world",
     );
-    await expect(runtime.run(limits, settle)).rejects.toThrow(
+    await expect(runtime.run(limits, host)).rejects.toThrow(
       "a task of crashed process 1",
     );
   });
