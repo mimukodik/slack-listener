@@ -85,6 +85,26 @@ BER-2193 completes the structural step described above. `main.ts`, the sampled s
 - **Exhaustive judgment:** each valid prefix is replayed from a fresh program and world because live Effect fibers cannot be cloned. The alphabet and fixed four-second action spacing stay; no core state or effect is interpreted by this driver. A final disconnect is healed before terminal settling, as in the former driver's `settle`. Runtime-dependent prefix validity is reported by the external world, so sequence counts are measured again rather than copied from the old interpreter.
 - **Controls and evidence:** one control suppresses observed stdout deliveries; the other presents unfiltered world messages to the same notification observer. The actual program still runs in both. Whole-program replay requires the same seed to reproduce stdout and scheduler traces, and a different seed to change the trace. Catch-rate and timing receipts belong to the exact candidate and are reported with the pull request; no local receipt proves deployment or live Slack behavior.
 
+## 2026-11-18: a fast exhaustive pass
+
+BER-2207. Running the whole program (BER-2193) took depth 7 from about 6 seconds to about 6 minutes on CI. Behaviour and checks are unchanged (`structure-and-behavior-change-apart`); only how the pass reaches the same 88,025 sequences changed.
+
+- **The cause was waiting, not Effect.** Between simulated steps the loop waited one real `setImmediate` so promise callbacks could run, about 190 per run. A third of the runs were invalid sequences run in full and thrown away, and every run built a 20,000-entry choice tape (22% of a CI profile).
+- **Synchronous drain:** the loop now runs inside one macrotask and drains promise callbacks with V8's microtask checkpoint (`src/sim/host.ts`). It starts with a self-test and refuses a real `process.nextTick`, so the drain cannot silently not drain. The natives-syntax flag stays on: V8 can flush the drain's bytecode and parse it again.
+- **Only valid sequences run:** each run reports which next actions its final state allows, from one precondition table, and the pass runs only those. A spec compares the prediction with running every child up to 3 actions, and the depth-5 count is pinned at 3,065, since a wrong "invalid" would drop sequences silently.
+- **Split across cores:** the main thread runs sequences shorter than 3 actions and hands the 89 subtrees below to up to 8 worker threads. Violations are sorted into single-thread visiting order; a spec compares the split result with the single-threaded one, and a dead, throwing or silent worker fails the pass by name.
+- **Not taken:** copying state at branch points. Process fork works on macOS and Linux but costs 4-14 ms against a 0.5-2.9 ms replay; a run's fixed cost (about 1 ms of start, finish and checks against 0.15 ms per action) means even a free snapshot saves less than half. Skipping repeated states and commuting orderings is the larger lever and is deliberately left out while the architecture's limits are explored.
+- **CI:** moved to a 4-vCPU Blacksmith runner, faster and steadier than GitHub-hosted in the bench.
+
+| Depth 7               | main (3ee43ea) | drain + valid only | + split            |
+| --------------------- | -------------- | ------------------ | ------------------ |
+| Mac, 14 cores         | about 14 min   | 70.6 s             | 16.0 s (8 workers) |
+| GitHub-hosted, 4 vCPU | 405 s          | 153 s              | 82 s               |
+| Blacksmith, 4 vCPU    | 342 s          | 135 s              | 45 s               |
+| Blacksmith, 2 vCPU    | 523 s          | 222 s              | about 101 s        |
+
+The whole CI check job went from 8 minutes 40 seconds on main to 1 minute 55 seconds. The 2000-seed pass gives byte-identical traces and results to main for every seed.
+
 ## Changes after the first green run
 
 | When            | What                                                                                                                                                                                  | Direction                              | Cause                                                                                           |
@@ -113,3 +133,4 @@ BER-2193 completes the structural step described above. `main.ts`, the sampled s
 | 11-18, BER-2193 | framing, parent metadata and socket acknowledgements are checked as received                                                                                                          | checkers stricter at the real boundary | ideal rendering could pass while production output was wrong                                    |
 | 11-18, BER-2193 | edits use observed time plus body; parent oracle follows the first cached snapshot; reliable enrichment is explicit                                                                   | checker/fake scope clarified           | preserve the existing program while replacing the interpreter                                   |
 | 11-18, BER-2193 | progress ends on externally observed quiescence, with a hard bound after wake                                                                                                         | terminal observation corrected         | paginated catch-up can exceed a fixed grace period; periodic saves are not network activity     |
+| 11-18, BER-2207 | exhaustive pass runs only the children a prefix reports valid, split across worker threads                                                                                            | same sequences, count pinned           | speed; a spec checks the prediction and the split against full runs                             |
