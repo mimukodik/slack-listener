@@ -87,12 +87,12 @@ BER-2193 completes the structural step described above. `main.ts`, the sampled s
 
 ## 2026-11-18: a fast exhaustive pass
 
-BER-2207. Running the whole program (BER-2193) took depth 7 from about 6 seconds to about 6 minutes on CI. Behaviour and checks are unchanged (`structure-and-behavior-change-apart`); only how the pass reaches the same 88,025 sequences changed.
+BER-2207. Running the whole program (BER-2193) took depth 7 from about 6 seconds to about 6 minutes on CI. The program's behaviour and the checks are unchanged (`structure-and-behavior-change-apart`); a green pass reaches the same 88,025 sequences. A red pass reports less: a run that fails before its finish reports no next actions, so nothing below a failing prefix runs. It still fails with the same first violation, but with fewer sequences and violations than main counted (a planted R10 bug at depth 4: 224 and 50 against main's 1,088 and 914).
 
 - **The cause was waiting, not Effect.** Between simulated steps the loop waited one real `setImmediate` so promise callbacks could run, about 190 per run. A third of the runs were invalid sequences run in full and thrown away, and every run built a 20,000-entry choice tape (22% of a CI profile).
 - **Synchronous drain:** the loop now runs inside one macrotask and drains promise callbacks with V8's microtask checkpoint (`src/sim/host.ts`). It starts with a self-test and refuses a real `process.nextTick`, so the drain cannot silently not drain. The natives-syntax flag stays on: V8 can flush the drain's bytecode and parse it again.
 - **Only valid sequences run:** each run reports which next actions its final state allows, from one precondition table, and the pass runs only those. A spec compares the prediction with running every child up to 3 actions, and the depth-5 count is pinned at 3,065, since a wrong "invalid" would drop sequences silently.
-- **Split across cores:** the main thread runs sequences shorter than 3 actions and hands the 89 subtrees below to up to 8 worker threads. Violations are sorted into single-thread visiting order; a spec compares the split result with the single-threaded one, and a dead, throwing or silent worker fails the pass by name.
+- **Split across cores:** the main thread runs sequences shorter than 3 actions and hands the 89 subtrees below to up to 8 worker threads. Violations are sorted into single-thread visiting order; a spec compares the split result with the single-threaded one, and a worker that dies or throws fails the pass by name. A worker that stays alive and never answers would hang the pass until CI's job timeout; the pool has no deadline of its own. No committed check covers the merge and sort of violations, since the parity spec's tree has none; a planted mutation showed the spec fails without the sort.
 - **Not taken:** copying state at branch points. Process fork works on macOS and Linux but costs 4-14 ms against a 0.5-2.9 ms replay; a run's fixed cost (about 1 ms of start, finish and checks against 0.15 ms per action) means even a free snapshot saves less than half. Skipping repeated states and commuting orderings is the larger lever and is deliberately left out while the architecture's limits are explored.
 - **CI:** moved to a 4-vCPU Blacksmith runner, faster and steadier than GitHub-hosted in the bench.
 
@@ -100,10 +100,10 @@ BER-2207. Running the whole program (BER-2193) took depth 7 from about 6 seconds
 | --------------------- | -------------- | ------------------ | ------------------ |
 | Mac, 14 cores         | about 14 min   | 70.6 s             | 16.0 s (8 workers) |
 | GitHub-hosted, 4 vCPU | 405 s          | 153 s              | 82 s               |
-| Blacksmith, 4 vCPU    | 342 s          | 135 s              | 45 s               |
+| Blacksmith, 4 vCPU    | 342 s          | 135 s              | 45-73 s            |
 | Blacksmith, 2 vCPU    | 523 s          | 222 s              | about 101 s        |
 
-The whole CI check job went from 8 minutes 40 seconds on main to 1 minute 55 seconds. The 2000-seed pass gives byte-identical traces and results to main for every seed.
+The whole CI check job went from 8 minutes 40 seconds on main to between 1 minute 55 seconds and 2 minutes 44 seconds on two runs of the same runner type. The 2000-seed pass gives byte-identical traces and results to main for every seed.
 
 ## Changes after the first green run
 

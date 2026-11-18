@@ -11,7 +11,10 @@
 // withTripwire makes any real timer during a simulated run throw, and the
 // loop itself refuses process.nextTick, which the drain would not run, so
 // code that slips past Effect's services cannot go unnoticed
-// (PRINCIPLES.md: world-through-services, one-seed-one-run).
+// (PRINCIPLES.md: world-through-services, one-seed-one-run). The refusal
+// replaces only the global: code that kept its own reference to
+// process.nextTick at load would get past it. Identical seed traces show
+// nothing does today.
 import { setFlagsFromString } from "node:v8";
 import { runInThisContext } from "node:vm";
 
