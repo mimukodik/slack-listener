@@ -1,4 +1,6 @@
 import { Data, Effect } from "effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import type { HttpClientError } from "effect/http";
 
 import type { SlackMessage } from "./slack.ts";
 
@@ -17,13 +19,27 @@ interface SlackResponse {
   response_metadata?: { next_cursor?: string };
 }
 
+// The Slack Web API over Effect's HttpClient: production provides a client on
+// the real fetch, the simulator one on its fake (world-through-services).
 export class SlackApi {
   private readonly botToken: string;
   private readonly appToken: string;
+  private readonly http: HttpClient.HttpClient;
 
-  constructor(botToken: string, appToken: string) {
+  constructor(botToken: string, appToken: string, http: HttpClient.HttpClient) {
     this.botToken = botToken;
     this.appToken = appToken;
+    this.http = http;
+  }
+
+  static make(
+    botToken: string,
+    appToken: string,
+  ): Effect.Effect<SlackApi, never, HttpClient.HttpClient> {
+    return Effect.gen(function* () {
+      const http = yield* HttpClient.HttpClient;
+      return new SlackApi(botToken, appToken, http);
+    });
   }
 
   call<T extends SlackResponse>(
@@ -31,37 +47,50 @@ export class SlackApi {
     params: Record<string, string>,
     token: "bot" | "app" = "bot",
   ): Effect.Effect<T, SlackApiError> {
-    const authorization = `Bearer ${token === "bot" ? this.botToken : this.appToken}`;
-    return Effect.tryPromise({
-      try: async () => {
-        const response = await fetch(`https://slack.com/api/${method}`, {
-          method: "POST",
-          headers: {
-            authorization,
-            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
-          },
-          body: new URLSearchParams(params).toString(),
-        });
-        if (response.status === 429)
-          throw new Error(
-            `rate limited, retry after ${response.headers.get("retry-after") ?? "?"} s`,
-          );
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as T;
-      },
-      catch: (error) =>
-        new SlackApiError({
-          method,
-          reason: redact(String((error as Error).message ?? error)),
-        }),
-    }).pipe(
-      Effect.flatMap((body) =>
-        body.ok
+    const request = HttpClientRequest.post(
+      `https://slack.com/api/${method}`,
+    ).pipe(
+      HttpClientRequest.setHeader(
+        "authorization",
+        `Bearer ${token === "bot" ? this.botToken : this.appToken}`,
+      ),
+      HttpClientRequest.bodyUrlParams(params),
+    );
+    return this.http.execute(request).pipe(
+      Effect.flatMap(
+        (
+          response,
+        ): Effect.Effect<
+          unknown,
+          SlackApiError | HttpClientError.HttpClientError
+        > => {
+          if (response.status === 429)
+            return Effect.fail(
+              new SlackApiError({
+                method,
+                reason: `rate limited, retry after ${response.headers["retry-after"] ?? "?"} s`,
+              }),
+            );
+          if (response.status < 200 || response.status > 299)
+            return Effect.fail(
+              new SlackApiError({ method, reason: `HTTP ${response.status}` }),
+            );
+          return response.json;
+        },
+      ),
+      Effect.mapError((error) =>
+        error._tag === "SlackApiError"
+          ? error
+          : new SlackApiError({ method, reason: redact(error.message) }),
+      ),
+      Effect.flatMap((json) => {
+        const body = json as T;
+        return body.ok
           ? Effect.succeed(body)
           : Effect.fail(
               new SlackApiError({ method, reason: body.error ?? "not ok" }),
-            ),
-      ),
+            );
+      }),
     );
   }
 

@@ -42,7 +42,8 @@
           "returnEffectInGen": "error",
           "lazyPromiseInEffectSync": "error",
           "missingStarInYieldEffectGen": "error",
-          "missingReturnYieldStar": "error"
+          "missingReturnYieldStar": "error",
+          "unstableApiUsage": "off"
         }
       }
     ]
