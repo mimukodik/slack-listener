@@ -19,11 +19,12 @@ import type { SimHost } from "./runtime.ts";
 
 const realSetImmediate = globalThis.setImmediate;
 
+// The flag stays on for the process: V8 may flush the function's bytecode and
+// parse it again, which fails without it. Only the simulator loads this file.
 setFlagsFromString("--allow-natives-syntax");
 const checkpoint = runInThisContext(
   "(function () { %PerformMicrotaskCheckpoint(); })",
 ) as () => void;
-setFlagsFromString("--no-allow-natives-syntax");
 
 function drainSelfTest(): void {
   let drained = false;

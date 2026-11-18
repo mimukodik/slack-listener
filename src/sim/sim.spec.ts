@@ -66,7 +66,9 @@ describe("bounded exhaustive pass", () => {
   it("R2 R7 R10 R17: no violation in any valid sequence up to 5 actions", async () => {
     const result = await runExhaustive(5);
     expect(result.violations).toEqual([]);
-    expect(result.sequences).toBeGreaterThan(1000);
+    // Counted by running every child of every prefix, before the pass ran
+    // only predicted ones; a wrong "invalid" prediction would lower it.
+    expect(result.sequences).toBe(3065);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
   }, 120_000);

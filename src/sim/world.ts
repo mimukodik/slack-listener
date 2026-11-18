@@ -964,7 +964,9 @@ export class World {
   // next lists the actions that would be valid one step after the sequence:
   // the finish timer sits where a further action's timer would, so it reads
   // the same world, and the driver runs only those (it fails loudly if one
-  // turns out invalid).
+  // turns out invalid). This holds when every choice is 0, as the driver's
+  // tape makes it: timers due together then run in creation order, and the
+  // finish timer has the slot the further action's timer would have.
   async sequence(sequence: string): Promise<{
     valid: boolean;
     next: Action[];
@@ -1018,6 +1020,13 @@ export class World {
           return this.lastEnvelope !== null && this.running;
       }
     };
+    // allows and perform must agree; perform throws if allows let through an
+    // action whose state is missing, so the two cannot drift silently.
+    const present = <T>(value: T | null | undefined, action: Action): T => {
+      if (value === null || value === undefined)
+        throw new Error(`exhaustive ${action} allowed without its state`);
+      return value;
+    };
     const perform = (action: Action, index: number): void => {
       switch (action) {
         case "A":
@@ -1027,15 +1036,13 @@ export class World {
           b = post("own_agent", undefined, "starter B");
           break;
         case "a":
-          if (a !== null) post("other_agent", a, `reply A ${index}`);
+          post("other_agent", present(a, "a"), `reply A ${index}`);
           break;
         case "b":
-          if (b !== null) post("other_person", b, `reply B ${index}`);
+          post("other_person", present(b, "b"), `reply B ${index}`);
           break;
         case "e": {
-          const target = [...this.slack.messages.values()].at(-1);
-          if (target === undefined)
-            throw new Error("exhaustive edit allowed without a message");
+          const target = present([...this.slack.messages.values()].at(-1), "e");
           const previous = toSlack(target);
           target.text += ` (edited ${index})`;
           target.editedTs = this.slack.nextTs(this.now);
@@ -1057,14 +1064,15 @@ export class World {
           this.crashArmed = true;
           armedAge = 0;
           break;
-        case "u":
-          if (this.lastEnvelope !== null)
-            this.socket?.frame({
-              type: "events_api",
-              envelope_id: this.lastEnvelope.id,
-              payload: { event: this.lastEnvelope.message },
-            });
+        case "u": {
+          const envelope = present(this.lastEnvelope, "u");
+          this.socket?.frame({
+            type: "events_api",
+            envelope_id: envelope.id,
+            payload: { event: envelope.message },
+          });
           break;
+        }
       }
     };
     for (let index = 0; index < sequence.length; index += 1) {
