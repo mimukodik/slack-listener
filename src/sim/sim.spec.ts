@@ -73,6 +73,14 @@ describe("bounded exhaustive pass", () => {
       expect(count, name).toBeGreaterThan(0);
   }, 120_000);
 
+  // Split across threads, the pass must give the single-threaded result,
+  // violations in the same order. Two workers force the split on any runner.
+  it("the pass split across workers gives the single-threaded result", async () => {
+    const single = await runExhaustive(5);
+    const split = await runExhaustive(5, 2);
+    expect(split).toEqual(single);
+  }, 120_000);
+
   // The pass runs only the children a prefix predicts valid. Running every
   // child of every valid prefix up to 3 actions must give the same sets.
   it("a prefix predicts exactly which next actions are valid", async () => {
