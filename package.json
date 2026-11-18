@@ -22,6 +22,7 @@
     "exhaustive": "node src/sim/exhaustive.ts"
   },
   "dependencies": {
+    "@effect/platform-node-shared": "4.1.4",
     "effect": "4.1.4"
   },
   "devDependencies": {

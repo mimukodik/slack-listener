@@ -145,6 +145,16 @@
             "object": "globalThis",
             "property": "Date",
             "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "process",
+            "message": "world-through-services: the program reaches the world through Effect services."
+          },
+          {
+            "object": "globalThis",
+            "property": "WebSocket",
+            "message": "world-through-services: the program reaches the world through Effect services."
           }
         ],
         "no-restricted-imports": [
@@ -152,22 +162,193 @@
           {
             "patterns": [
               {
-                "group": [
-                  "node:*",
-                  "fs",
-                  "fs/*",
-                  "net",
-                  "child_process",
-                  "os",
-                  "http",
-                  "https",
-                  "dgram",
-                  "dns",
-                  "worker_threads",
-                  "timers",
-                  "timers/*"
-                ],
+                "group": ["node:*", "fs/*", "timers/*"],
                 "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              }
+            ],
+            "paths": [
+              {
+                "name": "fs",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "net",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "child_process",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "os",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "http",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "https",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "dgram",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "dns",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "worker_threads",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "timers",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/shell.ts", "src/mcp.ts", "src/slack-api.ts", "src/log.ts"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "setTimeout",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "setInterval",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "setImmediate",
+            "message": "world-through-services: scheduling belongs to the Effect Scheduler."
+          },
+          {
+            "name": "clearTimeout",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "clearInterval",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "queueMicrotask",
+            "message": "world-through-services: scheduling belongs to the Effect Scheduler."
+          },
+          {
+            "name": "performance",
+            "message": "world-through-services: time comes from the Clock service or the simulator."
+          },
+          {
+            "name": "fetch",
+            "message": "world-through-services: HTTP goes through the HttpClient service."
+          },
+          {
+            "name": "WebSocket",
+            "message": "world-through-services: sockets go through the Socket service."
+          },
+          {
+            "name": "process",
+            "message": "world-through-services: the process belongs to main.ts."
+          },
+          {
+            "name": "crypto",
+            "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Date",
+            "property": "now",
+            "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "Math",
+            "property": "random",
+            "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          },
+          {
+            "object": "globalThis",
+            "property": "setTimeout",
+            "message": "world-through-services: time comes from the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "fetch",
+            "message": "world-through-services: HTTP goes through the HttpClient service."
+          },
+          {
+            "object": "globalThis",
+            "property": "Date",
+            "message": "world-through-services: pass now in, or read the Clock service."
+          },
+          {
+            "object": "globalThis",
+            "property": "process",
+            "message": "world-through-services: the program reaches the world through Effect services."
+          },
+          {
+            "object": "globalThis",
+            "property": "WebSocket",
+            "message": "world-through-services: the program reaches the world through Effect services."
+          }
+        ],
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "fs/*", "timers/*"],
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              }
+            ],
+            "paths": [
+              {
+                "name": "fs",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "net",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "child_process",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "os",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "http",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "https",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "dgram",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "dns",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "worker_threads",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+              },
+              {
+                "name": "timers",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
               }
             ]
           }
