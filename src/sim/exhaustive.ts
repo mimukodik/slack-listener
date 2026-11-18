@@ -1,9 +1,12 @@
 // Bounded enumeration runs each valid prefix as the production program on the
 // deterministic fake world. Live fibers cannot be cloned; the world is replayed.
-import { World } from "./world.ts";
+// Each run reports which next actions are valid, so only valid sequences run.
+import { World, alphabet } from "./world.ts";
 
-export const alphabet = ["A", "B", "a", "b", "e", "d", "c", "u"] as const;
-export type Action = (typeof alphabet)[number];
+export { alphabet, type Action } from "./world.ts";
+
+// Every run takes the simplest choice; the tape is read-only, so one is shared.
+const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
 export interface ExhaustiveResult {
   bound: number;
   sequences: number;
@@ -32,12 +35,13 @@ export async function runExhaustive(bound: number): Promise<ExhaustiveResult> {
     const sequence = pending.pop();
     if (sequence === undefined)
       throw new Error("exhaustive agenda lost its entry");
-    const run = await new World({
-      seed: 1,
-      faults: false,
-      tape: Array.from({ length: 20_000 }, () => 0),
-    }).sequence(sequence);
-    if (!run.valid) continue;
+    const run = await new World({ seed: 1, faults: false, tape }).sequence(
+      sequence,
+    );
+    if (!run.valid)
+      throw new Error(
+        `exhaustive: "${sequence}" was predicted valid by its prefix but is not`,
+      );
     result.sequences += 1;
     if (!run.result.ok)
       result.violations.push({
@@ -61,7 +65,7 @@ export async function runExhaustive(bound: number): Promise<ExhaustiveResult> {
     )
       result.coverage.repliesUnderOwnAgent += 1;
     if (sequence.length < bound)
-      for (const action of [...alphabet].reverse())
+      for (const action of [...run.next].reverse())
         pending.push(sequence + action);
   }
   return result;

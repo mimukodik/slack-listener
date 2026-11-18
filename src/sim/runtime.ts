@@ -24,6 +24,13 @@ export type Outcome<A, E> =
   | { readonly kind: "stuck" }
   | { readonly kind: "limit"; readonly reason: "steps" | "time" };
 
+// What the runtime needs from the real process: a fresh macrotask to run the
+// loop in, and a synchronous drain of pending promise callbacks.
+export type SimHost = {
+  readonly enter: <A>(run: () => A) => Promise<A>;
+  readonly drain: () => void;
+};
+
 type Task = { readonly epoch: number; readonly run: () => void };
 type Timer = {
   readonly atMs: number;
@@ -240,22 +247,24 @@ export class SimRuntime {
 
   // Drives the world until the process ends, nothing is left to happen
   // (stuck: a liveness failure), or a limit is reached. A step is one task.
-  // After each task settle lets promise callbacks run, as Node drains
+  // After each task the host drains promise callbacks, as Node drains
   // microtasks after each macrotask, so a promise answered before a crash
-  // finishes while its process is alive. settle is the only thing taken
-  // from the host.
-  async run(
-    limits: Limits,
-    settle: () => Promise<void>,
-  ): Promise<Outcome<unknown, unknown>> {
+  // finishes while its process is alive. The loop runs synchronously inside
+  // one macrotask the host enters, because a drain inside a microtask does
+  // nothing. The host is the only thing taken from the real process.
+  async run(limits: Limits, host: SimHost): Promise<Outcome<unknown, unknown>> {
     assert(limits.stepsMax > 0 && limits.timeMsMax > 0, "limits not positive");
+    return host.enter(() => this.loop(limits, host));
+  }
+
+  private loop(limits: Limits, host: SimHost): Outcome<unknown, unknown> {
     for (let steps = 0; steps < limits.stepsMax; steps += 1) {
       if (this.ready.length > 0) {
         this.runOne();
-        await settle();
+        host.drain();
         continue;
       }
-      await settle();
+      host.drain();
       if (this.ready.length > 0) continue;
       const exit = this.fiberCurrent?.pollUnsafe();
       if (exit !== undefined) return { kind: "done", exit };

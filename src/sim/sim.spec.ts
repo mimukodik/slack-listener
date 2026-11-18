@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { runExhaustive } from "./exhaustive.ts";
 import { runSimulation } from "./simulator.ts";
+import { type Action, World, alphabet } from "./world.ts";
 
 describe("simulator", () => {
   it("R2 R4 R5 R7 R8 R10: whole-program seeded runs keep every rule", async () => {
@@ -68,5 +69,27 @@ describe("bounded exhaustive pass", () => {
     expect(result.sequences).toBeGreaterThan(1000);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
+  }, 120_000);
+
+  // The pass runs only the children a prefix predicts valid. Running every
+  // child of every valid prefix up to 3 actions must give the same sets.
+  it("a prefix predicts exactly which next actions are valid", async () => {
+    const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
+    const run = async (sequence: string) =>
+      new World({ seed: 1, faults: false, tape }).sequence(sequence);
+    const prefixes = [""];
+    let checked = 0;
+    while (prefixes.length > 0) {
+      const prefix = prefixes.pop() ?? "";
+      const parent = await run(prefix);
+      const valid: Action[] = [];
+      for (const action of alphabet)
+        if ((await run(prefix + action)).valid) valid.push(action);
+      expect(parent.next, `after "${prefix}"`).toEqual(valid);
+      checked += 1;
+      if (prefix.length < 3)
+        for (const action of valid) prefixes.push(prefix + action);
+    }
+    expect(checked).toBeGreaterThan(100);
   }, 120_000);
 });
