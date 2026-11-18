@@ -4,9 +4,7 @@
 // Runs are independent, so the tree splits across worker threads: the main
 // thread runs every sequence shorter than the split and hands the subtrees
 // below it to a pool, one root at a time (BER-2207).
-import { availableParallelism } from "node:os";
-import { Worker } from "node:worker_threads";
-
+import { defaultWorkers, runPool } from "./pool.ts";
 import { type Action, World, alphabet } from "./world.ts";
 
 export { alphabet, type Action } from "./world.ts";
@@ -17,7 +15,6 @@ const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
 // Subtrees start at this length: 89 roots up to 8 actions, the largest about
 // 1.5% of depth 7, so a pool of up to 8 stays balanced.
 const split = 3;
-const maxWorkers = 8;
 
 export interface ExhaustiveResult {
   bound: number;
@@ -119,66 +116,6 @@ function add(into: ExhaustiveResult, part: ExhaustiveResult): void {
     into.coverage[key] += part.coverage[key];
 }
 
-export type WorkerReply =
-  | { readonly index: number; readonly result: ExhaustiveResult }
-  | { readonly index: number; readonly error: string };
-
-async function pool(
-  roots: readonly string[],
-  bound: number,
-  workers: number,
-): Promise<ExhaustiveResult[]> {
-  const parts: (ExhaustiveResult | undefined)[] = roots.map(() => undefined);
-  const started: Worker[] = [];
-  let next = 0;
-  let received = 0;
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const give = (worker: Worker): void => {
-        if (next < roots.length) {
-          worker.postMessage({ index: next, root: roots[next], bound });
-          next += 1;
-        }
-      };
-      for (let i = 0; i < Math.min(workers, roots.length); i += 1) {
-        const worker = new Worker(
-          new URL("./exhaustive-worker.ts", import.meta.url),
-        );
-        started.push(worker);
-        worker.on("message", (reply: WorkerReply) => {
-          if ("error" in reply) {
-            reject(new Error(`exhaustive worker: ${reply.error}`));
-            return;
-          }
-          if (parts[reply.index] !== undefined)
-            reject(new Error(`exhaustive: root ${reply.index} answered twice`));
-          parts[reply.index] = reply.result;
-          received += 1;
-          if (received === roots.length) resolve();
-          else give(worker);
-        });
-        worker.on("error", reject);
-        worker.on("exit", (code) => {
-          if (received < roots.length)
-            reject(
-              new Error(
-                `exhaustive worker exited with ${code} before every subtree was run`,
-              ),
-            );
-        });
-        give(worker);
-      }
-    });
-  } finally {
-    await Promise.all(started.map(async (worker) => worker.terminate()));
-  }
-  return parts.map((part, index) => {
-    if (part === undefined)
-      throw new Error(`exhaustive: subtree "${roots[index]}" was not run`);
-    return part;
-  });
-}
-
 // workers above 1 split the tree across that many threads; the result is the
 // same as a single-threaded run, violations in the same order.
 export async function runExhaustive(
@@ -192,7 +129,12 @@ export async function runExhaustive(
   }
   const roots: string[] = [];
   await explore("", result, { length: split, roots });
-  for (const part of await pool(roots, bound, workers)) add(result, part);
+  const tasks = roots.map((root) => ({
+    kind: "subtree" as const,
+    root,
+    bound,
+  }));
+  for (const part of await runPool(tasks, workers)) add(result, part);
   result.violations.sort((left, right) =>
     visitingOrder(left.sequence, right.sequence),
   );
@@ -201,7 +143,7 @@ export async function runExhaustive(
 
 if (import.meta.main) {
   const bound = Number(process.argv[2] ?? 5);
-  const workers = Math.min(availableParallelism(), maxWorkers);
+  const workers = defaultWorkers;
   const startedAt = Date.now();
   const result = await runExhaustive(bound, workers);
   for (const violation of result.violations.slice(0, 10))
