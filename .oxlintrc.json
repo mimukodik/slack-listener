@@ -66,6 +66,8 @@
         "src/settle.ts",
         "src/slack.ts",
         "src/sim/simulator.ts",
+        "src/sim/world.ts",
+        "src/sim/checker.ts",
         "src/sim/slack-fake.ts",
         "src/sim/choices.ts",
         "src/sim/runtime.ts",
@@ -213,7 +215,13 @@
       }
     },
     {
-      "files": ["src/shell.ts", "src/mcp.ts", "src/slack-api.ts", "src/log.ts"],
+      "files": [
+        "src/program.ts",
+        "src/shell.ts",
+        "src/mcp.ts",
+        "src/slack-api.ts",
+        "src/log.ts"
+      ],
       "rules": {
         "no-restricted-globals": [
           "error",

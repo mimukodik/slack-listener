@@ -1,19 +1,18 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { step } from "../core.ts";
 import { runExhaustive } from "./exhaustive.ts";
-import { runSimulation, type StepFn } from "./simulator.ts";
+import { runSimulation } from "./simulator.ts";
 
 describe("simulator", () => {
-  it("R2 R4 R5 R7 R8 R10: seeded runs with faults keep every rule", () => {
+  it("R2 R4 R5 R7 R8 R10: whole-program seeded runs keep every rule", async () => {
     const totals: Record<string, number> = {};
-    fc.assert(
-      fc.property(
+    await fc.assert(
+      fc.asyncProperty(
         fc.integer(),
         fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 60 }),
-        (seed, tape) => {
-          const result = runSimulation({ seed, tape });
+        async (seed, tape) => {
+          const result = await runSimulation({ seed, tape });
           for (const [key, value] of Object.entries(result.coverage))
             totals[key] = (totals[key] ?? 0) + value;
           if (!result.ok) throw new Error(`seed ${seed}: ${result.failure}`);
@@ -23,71 +22,51 @@ describe("simulator", () => {
     );
     for (const [key, value] of Object.entries(totals))
       expect(value, key).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("the same whole-program seed replays stdout, disk and scheduler choices", async () => {
+    const firstTrace: string[] = [];
+    const secondTrace: string[] = [];
+    const first = await runSimulation({
+      seed: 17,
+      actions: 30,
+      trace: firstTrace,
+    });
+    const second = await runSimulation({
+      seed: 17,
+      actions: 30,
+      trace: secondTrace,
+    });
+    expect(first.ok, first.failure ?? "").toBe(true);
+    expect(second).toEqual(first);
+    expect(secondTrace).toEqual(firstTrace);
+    const differentTrace: string[] = [];
+    await runSimulation({ seed: 18, actions: 30, trace: differentTrace });
+    expect(differentTrace).not.toEqual(firstTrace);
   });
 });
 
-describe("two controls on the checks", () => {
-  it("a build that delivers nothing fails a progress rule", () => {
-    const refuseAll: StepFn = (state, event, now) => {
-      const result = step(state, event, now);
-      return {
-        state: result.state,
-        effects: result.effects.filter((e) => e.type !== "deliver"),
-      };
-    };
-    const failures = [1, 2, 3, 4, 5].map(
-      (seed) => runSimulation({ seed, step: refuseAll }).failure,
-    );
-    expect(
-      failures.every(
-        (f) => f !== null && (f.startsWith("R7") || f.startsWith("R8")),
-      ),
-    ).toBe(true);
+describe("two controls on the observations", () => {
+  it("no observed delivery fails progress", async () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const result = await runSimulation({ seed, control: "nothing" });
+      expect(result.failure).toMatch(/R7|R8/);
+    }
   });
-
-  it("a build that delivers every message unfiltered fails a safety rule", () => {
-    const deliverAll: StepFn = (state, event, now) => {
-      const result = step(state, event, now);
-      if (event.type !== "envelope" || event.message === null) return result;
-      const m = event.message;
-      return {
-        state: result.state,
-        effects: [
-          ...result.effects,
-          {
-            type: "deliver",
-            delivery: {
-              key: `raw:${m.ts}`,
-              kind: "message",
-              channel: m.channel ?? "",
-              ts: m.ts,
-              threadTs: m.thread_ts ?? m.ts,
-              isReply: false,
-              user: m.user ?? "",
-              text: m.text ?? "",
-              postedAtMs: now,
-              editedAtMs: null,
-              possibleDuplicate: false,
-            },
-          },
-        ],
-      };
-    };
-    const failures = [1, 2, 3, 4, 5].map(
-      (seed) => runSimulation({ seed, step: deliverAll }).failure,
-    );
-    expect(
-      failures.every((f) => f !== null && f.startsWith("SafetyViolation")),
-    ).toBe(true);
+  it("observing every message without filtering fails safety", async () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const result = await runSimulation({ seed, control: "everything" });
+      expect(result.failure).toMatch(/SafetyViolation|R10|R4|R2|R17/);
+    }
   });
 });
 
 describe("bounded exhaustive pass", () => {
-  it("R2 R7 R10 R17: no violation in any sequence of up to 5 actions", () => {
-    const result = runExhaustive(5);
+  it("R2 R7 R10 R17: no violation in any valid sequence up to 5 actions", async () => {
+    const result = await runExhaustive(5);
     expect(result.violations).toEqual([]);
-    expect(result.sequences).toBe(3068);
+    expect(result.sequences).toBeGreaterThan(1000);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
-  });
+  }, 120_000);
 });

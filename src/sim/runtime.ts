@@ -57,10 +57,12 @@ export class SimRuntime {
   private timers: Timer[] = [];
   private fiberCurrent: Fiber<unknown, unknown> | null = null;
   private opsThisTurnMax = opsPerTurnMax;
+  private pausedUntilMs = 0;
 
-  constructor(seed: number, tape: readonly number[] = []) {
+  constructor(seed: number, tape: readonly number[] = [], startMs = 0) {
     assert(Number.isInteger(seed), "seed is not an integer");
     this.choices = new Choices(seed, tape);
+    this.nowMsValue = startMs;
   }
 
   get nowMs(): number {
@@ -85,14 +87,17 @@ export class SimRuntime {
     assert(Number.isFinite(delayMs) && delayMs >= 0, `bad delay ${delayMs}`);
     this.seq += 1;
     const timer: Timer = {
-      atMs: this.nowMsValue + delayMs,
+      atMs:
+        owner === "world"
+          ? this.nowMsValue + delayMs
+          : Math.max(this.nowMsValue + delayMs, this.pausedUntilMs),
       seq: this.seq,
       epoch: owner === "world" ? worldEpoch : this.epochValue,
       fire,
     };
     this.timers.push(timer);
     return () => {
-      this.timers = this.timers.filter((t) => t !== timer);
+      this.timers = this.timers.filter((t) => t.seq !== timer.seq);
     };
   }
 
@@ -100,7 +105,9 @@ export class SimRuntime {
     const epoch = this.epochValue;
     const dispatcher: SchedulerDispatcher = {
       scheduleTask: (run) => {
-        this.ready.push({ epoch, run });
+        if (epoch === this.epochValue && this.nowMsValue < this.pausedUntilMs)
+          this.at(this.pausedUntilMs - this.nowMsValue, run);
+        else this.ready.push({ epoch, run });
       },
       flush: () => {},
     };
@@ -134,6 +141,7 @@ export class SimRuntime {
   start<A, E>(program: Effect.Effect<A, E>): Fiber<A, E> {
     assert(this.fiberCurrent === null, "a process is already running");
     this.epochValue += 1;
+    this.pausedUntilMs = 0;
     this.trace.push(`${this.nowMsValue} start ${this.epochValue}`);
     const seeded = program.pipe(
       Effect.provideService(Clock.Clock, this.clock()),
@@ -163,6 +171,23 @@ export class SimRuntime {
       this.ready.every((t) => t.epoch !== epoch),
       "crash left a task",
     );
+  }
+
+  // Laptop sleep parks only the process. World actions keep running; timers
+  // whose deadlines pass during sleep become runnable together at wake-up.
+  pause(durationMs: number): void {
+    assert(Number.isFinite(durationMs) && durationMs > 0, "bad sleep duration");
+    const until = this.nowMsValue + durationMs;
+    this.pausedUntilMs = Math.max(this.pausedUntilMs, until);
+    this.timers = this.timers.map((timer) =>
+      timer.epoch === this.epochValue
+        ? { ...timer, atMs: Math.max(timer.atMs, until) }
+        : timer,
+    );
+    const parked = this.ready.filter((task) => task.epoch === this.epochValue);
+    this.ready = this.ready.filter((task) => task.epoch !== this.epochValue);
+    for (const task of parked) this.at(until - this.nowMsValue, task.run);
+    this.trace.push(`${this.nowMsValue} sleep until ${until}`);
   }
 
   private live(epoch: number): boolean {

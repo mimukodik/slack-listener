@@ -27,7 +27,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 // The session's side of stdio: lines the test sends, lines the listener wrote.
-function session() {
+function session(dieOnNotification = false) {
   const lines: Array<Record<string, unknown>> = [];
   const stderr: string[] = [];
   const stdin = Effect.runSync(Queue.unbounded<Uint8Array, Cause.Done>());
@@ -38,6 +38,11 @@ function session() {
         Effect.sync(() => {
           const text =
             typeof chunk === "string" ? chunk : decoder.decode(chunk);
+          if (
+            dieOnNotification &&
+            text.includes("notifications/claude/channel")
+          )
+            throw new Error("delivery fiber died at stdout");
           for (const line of text.split("\n"))
             if (line.trim() !== "") lines.push(JSON.parse(line));
         }),
@@ -264,8 +269,11 @@ const testConfig: ListenerConfig = {
 
 // Starts the whole shell on the test's stdio, a scripted fetch, the given
 // WebSocket constructor and an in-memory disk.
-function startShell(webSocket: (url: string) => Socket.WebSocketLike) {
-  const stdio = session();
+function startShell(
+  webSocket: (url: string) => Socket.WebSocketLike,
+  dieOnNotification = false,
+) {
+  const stdio = session(dieOnNotification);
   const calls: string[] = [];
   const files = new Map<string, string>();
   const fetch = (async (input: string | URL | Request) => {
@@ -400,6 +408,29 @@ describe("the shell as an Effect program", () => {
     const exit = await shell.done;
     expect(exit._tag).toBe("Failure");
     expect(JSON.stringify(exit)).toContain("a fiber of the shell stopped");
+  });
+
+  it("stops loudly when a delivery fiber dies while writing to the session", async () => {
+    const socket = new FakeSocket();
+    const shell = startShell(() => {
+      setTimeout(() => socket.open(), 1);
+      return socket;
+    }, true);
+    await until(() => socket.readyState === 1, "the socket");
+    socket.frame({ type: "hello" });
+    socket.frame(
+      envelope("EDEATH", {
+        type: "message",
+        channel: "C0WATCH001",
+        user: "U0OTHER01",
+        text: "delivery dies",
+        ts: msToTs(Date.now()),
+      }),
+    );
+    const exit = await shell.done;
+    expect(exit._tag).toBe("Failure");
+    expect(JSON.stringify(exit)).toContain("a fiber of the shell stopped");
+    expect(JSON.stringify(exit)).toContain("delivery fiber died at stdout");
   });
 
   it("fires only the latest timer of a name", async () => {

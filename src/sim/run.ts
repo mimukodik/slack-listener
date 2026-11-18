@@ -14,7 +14,7 @@ if (
 const started = Date.now();
 const failures: string[] = [];
 for (let seed = 1; seed <= seeds; seed += 1) {
-  const result = runSimulation({ seed, actions });
+  const result = await runSimulation({ seed, actions });
   if (!result.ok) failures.push(`seed ${seed}: ${result.failure}`);
 }
 for (const line of failures.slice(0, 10)) process.stdout.write(`${line}\n`);
