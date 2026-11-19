@@ -130,8 +130,27 @@ BER-2242, R18. The other side polled with a cron job, every 1 or 10 minutes, to 
 - **Not taken:**
   - An exhaustive action for an own-side answer. The alphabet has none, so the exhaustive pass checks only additions, and the sampled pass covers removal. Adding a letter would grow every depth. The green pass still reaches the same 88,025 sequences at depth 7.
   - Reading back from Slack which reactions exist after a restart.
-- **Open:** RULES.md lists R18 under the step 2 heading, which says posting stays off until `posting: true`. The specifications say R18 applies in step 1, and the code does not gate it. Moving the rule needs the maintainer's approval, so it stays where it was written.
+- **Open:** RULES.md lists R18 under the step 2 heading, which says posting stays off until `posting: true`. The specifications say R18 applies in step 1, and the code does not gate it. Moving the rule needs the maintainer's approval, so it stays where it was written. Settled the same day: Greg approved moving it to step 1 (next entry).
 - **Limit:** reaction state is pruned with the claims, after 8 days. An answer after that leaves the reaction on, as threads older than 7 days are out of scope already.
+
+## 2026-11-19: done, when a message needs no reply
+
+BER-2242, R18 changed. On the first live run, a reply Greg typed in a thread got the reaction itself, and nothing could take it off. His own typed messages are delivered to his session, and an answer from the agent was the only thing that removed a reaction. Greg's direction: the reaction shows the agent received the message, and it comes off once the agent has dealt with it, by answering or by deciding not to. He sends messages to his own agent through the channel, so his typed messages keep getting the reaction. Every delivered message gets it, thread replies included, because the agents mostly talk in threads; one answer clears every earlier reaction in its thread. Greg approved the rule text and the move of R18 to step 1.
+
+- **The tool:** the channel server offers `done`, which takes a message's `ts` and nothing else, so no text of the session's can reach Slack through it. The core ignores a `ts` it never took in and logs it. It keeps the mark, so a `done` that arrives between the write and its delivered event still keeps the reaction off. The session's instructions say to answer in the thread, or call `done` when no reply is needed.
+- **A mark is saved at once:** an answer can be read again from Slack by catch-up after a crash, but a mark exists nowhere else. The first simulator run found it: 15 of 2000 seeds kept a reaction after `done`, because a crash came before the next save.
+- **Simulator:** in sampled runs, the session calls `done` on a fifth of the messages it is handed, 0 to 5 seconds later. A removal is allowed after an own-side answer or a `done`, and at the end a marked message must carry no reaction. The exhaustive pass makes no marks, so its 88,025 sequences are unchanged.
+- **Mutants, each restored from a copy (2000 seeds; core tests):**
+
+  | Mutant                            | 2000 seeds | Core tests |
+  | --------------------------------- | ---------- | ---------- |
+  | `done` is ignored                 | 1,980 fail | 2 fail     |
+  | `done` clears the whole thread    | 1,324 fail | 1 fails    |
+  | an early mark is not kept         | 3 fail     | 1 fails    |
+  | the mark is not saved             | 18 fail    | pass       |
+  | a `ts` never taken in is accepted | pass       | 1 fails    |
+
+  With marks in the sampled runs, the earlier mutants give: no removal on an answer 1,786; added when the delivery starts 1,748; queue not saved 183; an earlier answer ignored 1,178; every queued call at once 831 (7 before marks); no retries 761.
 
 ## Changes after the first green run
 
@@ -166,3 +185,5 @@ BER-2242, R18. The other side polled with a cron job, every 1 or 10 minutes, to 
 | 11-19, BER-2242 | R18 added: the own bot's reaction on a delivered message, taken off when our side answers in its thread; `reactions:write`                                                                                                                | rule added                             | Greg's decision: the other side polled to learn whether a message arrived                                                                                                                     |
 | 11-19, BER-2242 | fake: reactions kept per user; a reaction call fails half the time while the API fails and takes up to 5 s; checker: R18 on each call and at the end of a run, excusing a message only once a call was given up (three failures in a row) | fake and checker added                 | R18                                                                                                                                                                                           |
 | 11-19, BER-2242 | the R2 crash spec finds the in-flight save by its content, not its position                                                                                                                                                               | test corrected                         | R18 adds a save after it                                                                                                                                                                      |
+| 11-19, BER-2242 | R18: the session's `done` takes the reaction off a message that needs no reply; R18 moves to step 1                                                                                                                                       | rule wider                             | Greg's decision after the first live run: his typed reply got a reaction nothing could remove                                                                                                 |
+| 11-19, BER-2242 | fake session marks a fifth of its messages done; checker allows a removal after `done` and requires none to stay                                                                                                                          | fake and checker changed               | R18                                                                                                                                                                                           |

@@ -412,6 +412,36 @@ describe("the shell as an Effect program", () => {
       "the reactions removed",
     );
 
+    // R18: the session's done takes a reaction off without an answer.
+    const quiet = msToTs(Date.now() + 3);
+    first.frame(
+      envelope("E0004", {
+        type: "message",
+        channel: "C0WATCH001",
+        user: "U0OTHER01",
+        text: "no reply needed",
+        ts: quiet,
+      }),
+    );
+    await until(
+      () => shell.calls.filter((call) => call === "reactions.add").length === 3,
+      "the third reaction",
+    );
+    shell.stdio.send({ jsonrpc: "2.0", id: 7, method: "tools/list" });
+    shell.stdio.send({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: { name: "done", arguments: { ts: quiet } },
+    });
+    await until(
+      () =>
+        shell.calls.filter((call) => call === "reactions.remove").length === 3,
+      "the reaction taken off by done",
+    );
+    expect(JSON.stringify(shell.stdio.lines)).toContain('"name":"done"');
+    expect(JSON.stringify(shell.stdio.lines)).toContain(`Marked ${quiet} done`);
+
     first.frame({ type: "disconnect", reason: "refresh_requested" });
     await until(() => sockets[1]?.readyState === 1, "the second socket");
     expect(shell.stdio.stderr.join("")).toContain(
@@ -421,7 +451,7 @@ describe("the shell as an Effect program", () => {
     shell.stdio.close();
     const exit = await shell.done;
     expect(exit._tag).toBe("Success");
-    expect(shell.notifications()).toHaveLength(2);
+    expect(shell.notifications()).toHaveLength(3);
     expect(shell.stdio.stderr.join("")).toContain(
       "stopping: the session closed stdin",
     );

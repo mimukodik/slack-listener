@@ -64,14 +64,14 @@ In a 1Password vault of your choice, create an item named "slack-listener <name>
 
 ## Why each permission is there
 
-| Permission          | Why it is there                                                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `groups:history`    | Reads the private channel's messages and threads, live and when catching up after a reconnect.                   |
-| `users:read`        | Turns user ids into display names.                                                                               |
-| `chat:write`        | There from the start, so the app is created once. Replying stays switched off in the configuration until step 2. |
-| `reactions:write`   | Adds the bot's own reaction to a delivered message and takes it off once your side answered (R18).               |
-| `message.groups`    | The event that delivers new messages over Socket Mode.                                                           |
-| `connections:write` | Lets the app-level token open the Socket Mode connection.                                                        |
+| Permission          | Why it is there                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `groups:history`    | Reads the private channel's messages and threads, live and when catching up after a reconnect.                                   |
+| `users:read`        | Turns user ids into display names.                                                                                               |
+| `chat:write`        | There from the start, so the app is created once. Replying stays switched off in the configuration until step 2.                 |
+| `reactions:write`   | Adds the bot's own reaction to a delivered message and takes it off once your side answered or the session marked it done (R18). |
+| `message.groups`    | The event that delivers new messages over Socket Mode.                                                                           |
+| `connections:write` | Lets the app-level token open the Socket Mode connection.                                                                        |
 
 An app created before R18 lacks `reactions:write`: add it under OAuth & Permissions → Bot Token Scopes and reinstall the app. Until then each reaction call fails; the tool logs it and delivers as before.
 

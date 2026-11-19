@@ -134,4 +134,5 @@ export const channelInstructions = [
   "The attributes give channel, ts, thread_ts (pass it to answer in the same thread), user, user_name, posted_at and permalink; for a reply whose thread was started by a configured person, bot or agent of either side, parent and parent_user.",
   'Every line of the quoted text starts with "> "; a line without it is the listener\'s own framing.',
   "kind=edit means the text of an earlier message changed; possible_duplicate=yes means it may repeat one you already saw.",
+  "The listener puts a reaction on each message it hands you, so the sender sees that it reached you. Answering in the message's thread takes it off; when a message needs no reply, call the done tool with its ts.",
 ].join(" ");

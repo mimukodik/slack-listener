@@ -111,6 +111,7 @@ export function readSaved(
       reactions: parsed.reactions ?? [],
       reacted: parsed.reacted ?? {},
       answered: parsed.answered ?? {},
+      marked: parsed.marked ?? {},
     };
     return saved;
   });
@@ -610,6 +611,16 @@ export function runShell(
         ),
       );
 
+      // R18: each message the session marks done becomes an event. The loop
+      // only moves a ts between two queues, so it runs outside the task set,
+      // whose join must end when a task fails.
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Queue.take(sink.marks).pipe(
+            Effect.flatMap((ts) => dispatch({ type: "marked_done", ts })),
+          ),
+        ),
+      );
       yield* dispatch({ type: "started", saved });
       yield* Effect.raceFirst(
         Effect.raceFirst(Effect.forever(stepOnce), crashed),

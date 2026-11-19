@@ -200,13 +200,14 @@ export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
 
 // R18 once the world is quiet: every message handed to the session carries
 // the own bot's reaction while the own side has not answered after it in its
-// thread, and none once it has. A message a reaction call was given up for,
+// thread and the session has not marked it done, and none once either holds. A message a reaction call was given up for,
 // after its tries all failed in a row, may be either way, as the rule allows;
 // so may one whose answer was deleted, which the listener may never have seen.
 export function checkReactions(
   slack: SlackFake,
   session: SessionRecord[],
   name: string,
+  marked: ReadonlySet<string>,
 ): string | null {
   const delivered = new Set(
     session
@@ -220,10 +221,11 @@ export function checkReactions(
     const answers = ownAnswers(slack, ts);
     if (answers.some((answer) => answer.deleted)) continue;
     const has = slack.reactions.get(ts)?.has(`${people.ownBot}:${name}`);
-    if (answers.length === 0 && has !== true)
-      return `R18: delivered ${ts} has no reaction while our side has not answered`;
-    if (answers.length > 0 && has === true)
-      return `R18: ${ts} keeps its reaction after our side answered`;
+    const handled = answers.length > 0 || marked.has(ts);
+    if (!handled && has !== true)
+      return `R18: delivered ${ts} has no reaction while our side has not answered or marked it`;
+    if (handled && has === true)
+      return `R18: ${ts} keeps its reaction after our side ${answers.length > 0 ? "answered" : "marked it done"}`;
   }
   return null;
 }

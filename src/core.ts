@@ -60,6 +60,7 @@ export interface Saved {
   reactions: Reaction[];
   reacted: Record<string, string>;
   answered: Record<string, string>;
+  marked: Record<string, number>;
 }
 
 export type TimerName = "reconnect" | "sink" | "tick" | "catch_up" | "release";
@@ -87,6 +88,7 @@ export type CoreEvent =
   | { type: "delivered"; key: string }
   | { type: "deliver_failed"; key: string; reason: string }
   | { type: "reaction_done"; reaction: Reaction }
+  | { type: "marked_done"; ts: string }
   | { type: "timer"; name: TimerName };
 
 export type CoreEffect =
@@ -138,11 +140,13 @@ export interface State {
   sinkAttempt: number;
   // R18: reaction calls in order, the head in flight when reactionInflight;
   // reacted maps a message carrying the own reaction to its thread, answered
-  // a thread to the latest own-side post in it.
+  // a thread to the latest own-side post in it, marked the messages the
+  // session marked done.
   reactions: Reaction[];
   reactionInflight: boolean;
   reacted: Record<string, string>;
   answered: Record<string, string>;
+  marked: Record<string, number>;
   reactionsDropped: number;
 }
 
@@ -181,6 +185,7 @@ export function initialState(config: CoreConfig): State {
     reactionInflight: false,
     reacted: {},
     answered: {},
+    marked: {},
     reactionsDropped: 0,
   };
 }
@@ -252,6 +257,7 @@ function snapshot(state: State): Saved {
     reactions: state.reactions,
     reacted: state.reacted,
     answered: state.answered,
+    marked: state.marked,
   };
 }
 
@@ -382,9 +388,14 @@ function noteAnswer(state: State, message: SlackMessage): State {
 }
 
 // R18: a message handed to the session gets the own reaction, unless the own
-// side already answered after it in its thread. An edit adds none.
+// side already answered after it in its thread or the session marked it done.
+// An edit adds none.
 function reactTo(state: State, delivery: Delivery): State {
-  if (delivery.kind !== "message" || state.reacted[delivery.ts] !== undefined)
+  if (
+    delivery.kind !== "message" ||
+    state.reacted[delivery.ts] !== undefined ||
+    state.marked[delivery.ts] !== undefined
+  )
     return state;
   const answer = state.answered[delivery.threadTs];
   if (answer !== undefined && compareTs(answer, delivery.ts) > 0) return state;
@@ -395,6 +406,27 @@ function reactTo(state: State, delivery: Delivery): State {
     },
     [{ action: "add", ts: delivery.ts }],
   );
+}
+
+// R18: the session marked a message done. Only a message this listener took
+// in counts; the mark is kept, so a mark made before the reaction was added
+// still keeps it off.
+function markDone(state: State, ts: string, effects: CoreEffect[]): State {
+  if (state.claimed[`m:${ts}`] === undefined) {
+    effects.push({
+      type: "log",
+      message: `done for ${ts} ignored: not a message this listener took in`,
+    });
+    return state;
+  }
+  if (state.marked[ts] !== undefined) return state;
+  const marked = { ...state.marked, [ts]: tsToMs(ts) };
+  if (state.reacted[ts] === undefined) return { ...state, marked };
+  const reacted = { ...state.reacted };
+  delete reacted[ts];
+  return queueReactions({ ...state, marked, reacted }, [
+    { action: "remove", ts },
+  ]);
 }
 
 // One reaction call at a time, so a removal never overtakes its addition.
@@ -589,7 +621,11 @@ function prune(state: State, now: number): State {
   for (const [thread, ts] of Object.entries(state.answered)) {
     if (tsToMs(ts) >= horizon) answered[thread] = ts;
   }
-  return { ...state, claimed, reacted, answered };
+  const marked: Record<string, number> = {};
+  for (const [ts, at] of Object.entries(state.marked)) {
+    if (at >= horizon) marked[ts] = at;
+  }
+  return { ...state, claimed, reacted, answered, marked };
 }
 
 export function step(state: State, event: CoreEvent, now: number): StepResult {
@@ -637,6 +673,7 @@ function reduce(
             reactions: [...saved.reactions],
             reacted: { ...saved.reacted },
             answered: { ...saved.answered },
+            marked: { ...saved.marked },
           }
         : { ...state, caughtUpUntilMs: now, floorMs: now };
       next = connect(next, now, effects);
@@ -797,6 +834,14 @@ function reduce(
       )
         return state;
       return { ...state, reactions: rest, reactionInflight: false };
+    }
+    case "marked_done": {
+      // A mark exists nowhere else, so it is saved at once; an answer can be
+      // read again from Slack by catch-up, a mark cannot.
+      const next = markDone(state, event.ts, effects);
+      if (next.marked !== state.marked)
+        effects.push({ type: "save", saved: snapshot(next) });
+      return next;
     }
     case "timer":
       return onTimer(state, event.name, now, effects);
