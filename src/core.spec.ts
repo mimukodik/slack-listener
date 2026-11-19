@@ -669,7 +669,10 @@ describe("R18: a reaction says the message reached the session", () => {
     const before = d.state;
     const effects = d.send({ type: "marked_done", ts: ts(99) });
     expect(d.state).toEqual(before);
-    expect(effects.map((e) => e.type)).toEqual(["log"]);
+    expect(effects).toEqual([
+      expect.objectContaining({ type: "log" }),
+      { type: "mark_answer", ts: ts(99), taken: false },
+    ]);
   });
 
   it("a reaction call not yet finished is made again after a crash", () => {

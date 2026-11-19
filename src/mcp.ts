@@ -54,9 +54,16 @@ const doneTool = {
 
 const slackTs = /^\d{10}\.\d{6}$/;
 
+// A done call waiting for the listener: answer is done with whether the mark
+// was taken, once it is saved, and only then does the session get its reply.
+export interface Mark {
+  readonly ts: string;
+  readonly answer: Deferred.Deferred<boolean>;
+}
+
 export class ChannelServer {
-  // The ts of each message the session marked done, in order (R18).
-  readonly marks: Queue.Queue<string>;
+  // Each message the session marked done, in order (R18).
+  readonly marks: Queue.Queue<Mark>;
   // Done once the session sent notifications/initialized.
   readonly initialized: Deferred.Deferred<void>;
   // Done once stdin ended: the session is gone.
@@ -69,7 +76,7 @@ export class ChannelServer {
     write: (message: object) => Effect.Effect<void, SinkError>,
     initialized: Deferred.Deferred<void>,
     closed: Deferred.Deferred<void>,
-    marks: Queue.Queue<string>,
+    marks: Queue.Queue<Mark>,
   ) {
     this.marks = marks;
     this.options = options;
@@ -99,7 +106,7 @@ export class ChannelServer {
         write,
         yield* Deferred.make<void>(),
         yield* Deferred.make<void>(),
-        yield* Queue.unbounded<string>(),
+        yield* Queue.unbounded<Mark>(),
       );
       yield* stdio.stdin.pipe(
         Stream.decodeText(),
@@ -196,14 +203,21 @@ export class ChannelServer {
         "done needs the message's ts, such as 1795099386.438339.",
         true,
       );
-    return Queue.offer(this.marks, ts).pipe(
-      Effect.andThen(
-        answer(
-          `Marked ${ts} done. If this listener put its reaction on that message, it comes off.`,
-          false,
-        ),
-      ),
-    );
+    const marks = this.marks;
+    return Effect.gen(function* () {
+      const decided = yield* Deferred.make<boolean>();
+      yield* Queue.offer(marks, { ts, answer: decided });
+      const taken = yield* Deferred.await(decided);
+      yield* taken
+        ? answer(
+            `Marked ${ts} done; the listener's reaction comes off it, or is never added.`,
+            false,
+          )
+        : answer(
+            `${ts} is not a message this listener handed you; nothing changed.`,
+            true,
+          );
+    });
   }
 
   notify(

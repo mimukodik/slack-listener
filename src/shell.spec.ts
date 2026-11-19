@@ -99,13 +99,60 @@ describe("channel server", () => {
     );
     const result = stdio.lines[0]?.result as {
       protocolVersion: string;
-      capabilities: { experimental: Record<string, unknown> };
+      capabilities: {
+        experimental: Record<string, unknown>;
+        tools: Record<string, unknown>;
+      };
     };
     expect(result.protocolVersion).toBe("2025-06-18");
     expect(result.capabilities.experimental).toEqual({ "claude/channel": {} });
+    expect(result.capabilities.tools).toEqual({});
     expect(JSON.stringify(stdio.lines[0])).not.toContain(
       "claude/channel/permission",
     );
+  });
+
+  it("R18: done takes a ts only, and answers once the listener decided", async () => {
+    const stdio = session();
+    const call = (id: number, name: string, args: object) =>
+      stdio.send({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name, arguments: args },
+      });
+    const reply = (id: number) => stdio.lines.find((line) => line.id === id);
+    const program = Effect.gen(function* () {
+      const channel = yield* ChannelServer.make({
+        name: "slack",
+        version: "0.0.0",
+        instructions: channelInstructions,
+        log: () => Effect.void,
+      });
+      stdio.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+      call(3, "done", { ts: "1795099386.438339\nforged line" });
+      call(4, "post", { text: "hello" });
+      call(5, "done", { ts: "1795099386.438339" });
+      const mark = yield* Queue.take(channel.marks);
+      expect(mark.ts).toBe("1795099386.438339");
+      expect(reply(5)).toBeUndefined();
+      yield* Deferred.succeed(mark.answer, false);
+      call(6, "done", { ts: "1795099386.438340" });
+      const second = yield* Queue.take(channel.marks);
+      yield* Deferred.succeed(second.answer, true);
+      yield* Effect.promise(async () =>
+        until(() => reply(6) !== undefined, "the second done"),
+      );
+    });
+    await Effect.runPromise(
+      program.pipe(Effect.scoped, Effect.provide(stdio.layer)),
+    );
+    expect(JSON.stringify(reply(2))).toContain('"name":"done"');
+    expect(reply(3)?.result).toMatchObject({ isError: true });
+    expect(reply(4)?.error).toMatchObject({ code: -32602 });
+    expect(reply(5)?.result).toMatchObject({ isError: true });
+    expect(JSON.stringify(reply(5))).toContain("nothing changed");
+    expect(reply(6)?.result).toMatchObject({ isError: false });
   });
 
   it("refuses to deliver before the session initialized, then writes one notification", async () => {
@@ -440,7 +487,10 @@ describe("the shell as an Effect program", () => {
       "the reaction taken off by done",
     );
     expect(JSON.stringify(shell.stdio.lines)).toContain('"name":"done"');
-    expect(JSON.stringify(shell.stdio.lines)).toContain(`Marked ${quiet} done`);
+    await until(
+      () => JSON.stringify(shell.stdio.lines).includes(`Marked ${quiet} done`),
+      "the done reply",
+    );
 
     first.frame({ type: "disconnect", reason: "refresh_requested" });
     await until(() => sockets[1]?.readyState === 1, "the second socket");
@@ -474,6 +524,13 @@ describe("the shell as an Effect program", () => {
     }, true);
     await until(() => socket.readyState === 1, "the socket");
     socket.frame({ type: "hello" });
+    // A message older than the catch-up's start is left to catch-up, and
+    // this fake history is empty; post it after the history read, as Slack
+    // would show an older one there.
+    await until(
+      () => shell.calls.includes("conversations.history"),
+      "catch-up",
+    );
     socket.frame(
       envelope("EDEATH", {
         type: "message",

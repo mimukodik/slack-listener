@@ -207,9 +207,12 @@ export class World {
   private wakeAtMs = simStartMs;
   private choices;
   private readonly options: SimOptions;
-  // R18: the messages the simulated session marked done. Only sampled runs
-  // mark, so the exhaustive pass is unchanged.
-  private readonly marked = new Set<string>();
+  // R18: the messages the simulated session sent done for, and those the
+  // listener confirmed. Only sampled runs mark, so the exhaustive pass is
+  // unchanged.
+  private readonly markSent = new Set<string>();
+  private readonly markConfirmed = new Set<string>();
+  private readonly markCalls = new Map<number, string>();
   private sessionMarks = false;
   private markId = 100;
   private readonly expectedParents = new Map<
@@ -575,7 +578,7 @@ export class World {
     if (
       action === "remove" &&
       ownAnswers(this.slack, ts).length === 0 &&
-      !this.marked.has(ts)
+      !this.markSent.has(ts)
     )
       throw new SafetyViolation(
         `R18: took the reaction off ${ts} before our side answered or marked it done`,
@@ -603,10 +606,30 @@ export class World {
   }
 
   private output(line: {
+    id?: number;
     method?: string;
     params?: { content: string; meta: Record<string, string> };
-    result?: { capabilities?: { experimental?: Record<string, unknown> } };
+    result?: {
+      capabilities?: { experimental?: Record<string, unknown> };
+      isError?: boolean;
+    };
   }): void {
+    const markedTs =
+      line.id === undefined ? undefined : this.markCalls.get(line.id);
+    if (markedTs !== undefined && line.result !== undefined) {
+      this.markCalls.delete(line.id ?? -1);
+      if (line.result.isError === true)
+        throw new SafetyViolation(
+          `R18: done for delivered ${markedTs} was refused`,
+        );
+      this.markConfirmed.add(markedTs);
+      this.coverage.doneMarks += 1;
+      // A crash right after the session heard its mark was taken: the mark
+      // must already be on disk.
+      if (this.faultsOn && this.choices.chance(30))
+        this.schedule(this.choices.between(0, 3), () => this.crash(1000));
+      return;
+    }
     if (
       line.result?.capabilities?.experimental?.["claude/channel/permission"] !==
       undefined
@@ -680,8 +703,8 @@ export class World {
     const stdin = this.stdin;
     this.answer(() => {
       if (epoch !== this.runtime.epoch || stdin === null) return;
-      this.marked.add(ts);
-      this.coverage.doneMarks += 1;
+      this.markSent.add(ts);
+      this.markCalls.set(this.markId + 1, ts);
       const call = {
         jsonrpc: "2.0",
         id: ++this.markId,
@@ -1033,7 +1056,8 @@ export class World {
         this.slack,
         this.session,
         this.config.reaction,
-        this.marked,
+        this.markSent,
+        this.markConfirmed,
       );
       if (unacked)
         this.failure ??= "R8: a live socket left an envelope unacknowledged";

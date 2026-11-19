@@ -103,6 +103,7 @@ export type CoreEffect =
     }
   | { type: "deliver"; delivery: Delivery }
   | { type: "react"; reaction: Reaction }
+  | { type: "mark_answer"; ts: string; taken: boolean }
   | { type: "save"; saved: Saved }
   | { type: "set_timer"; name: TimerName; atMs: number }
   | { type: "log"; message: string };
@@ -836,11 +837,17 @@ function reduce(
       return { ...state, reactions: rest, reactionInflight: false };
     }
     case "marked_done": {
-      // A mark exists nowhere else, so it is saved at once; an answer can be
-      // read again from Slack by catch-up, a mark cannot.
+      // A mark exists nowhere else, so it is saved before the session hears
+      // it was taken; an answer can be read again from Slack by catch-up, a
+      // mark cannot.
       const next = markDone(state, event.ts, effects);
       if (next.marked !== state.marked)
         effects.push({ type: "save", saved: snapshot(next) });
+      effects.push({
+        type: "mark_answer",
+        ts: event.ts,
+        taken: next.marked[event.ts] !== undefined,
+      });
       return next;
     }
     case "timer":
