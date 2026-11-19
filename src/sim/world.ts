@@ -223,7 +223,12 @@ export class World {
 
   constructor(options: SimOptions) {
     this.options = options;
-    this.runtime = new SimRuntime(options.seed, options.tape ?? [], simStartMs);
+    this.runtime = new SimRuntime(
+      options.seed,
+      options.tape ?? [],
+      simStartMs,
+      options.trace !== undefined,
+    );
     this.choices = this.runtime.choices;
     this.faultsOn = options.faults ?? true;
     this.actionsLeft = options.actions ?? 120;
@@ -1053,7 +1058,17 @@ export class World {
     this.faultsOn = false;
     this.crashArmed = false;
     const deadlineMs = Math.max(this.now, this.wakeAtMs) + 60 * 60_000;
+    // Polled until the world is quiet; the checks read the world only once
+    // the wait is over, since an early wake throws their result away.
     const observe = () => {
+      const quiet = this.now - this.lastIoMs > 65_000;
+      if (
+        this.now < deadlineMs &&
+        (!this.connected || this.pending > 0 || !quiet)
+      ) {
+        this.schedule(Math.max(1000, this.wakeAtMs - this.now), observe);
+        return;
+      }
       const savedText = this.files.get(this.config.stateFile);
       const saved =
         savedText === undefined ? null : (JSON.parse(savedText) as Saved);
@@ -1066,14 +1081,6 @@ export class World {
       const unacked = [...this.envelopes.values()].some(
         (envelope) => envelope.sentOn === this.socket?.id,
       );
-      const quiet = this.now - this.lastIoMs > 65_000;
-      if (
-        this.now < deadlineMs &&
-        (!this.connected || this.pending > 0 || !quiet)
-      ) {
-        this.schedule(Math.max(1000, this.wakeAtMs - this.now), observe);
-        return;
-      }
       this.failure ??= progress;
       this.failure ??= checkReactions(
         this.slack,
@@ -1122,7 +1129,7 @@ export class World {
     return {
       ok: this.failure === null,
       failure: this.failure,
-      steps: this.runtime.trace.length,
+      steps: this.runtime.entries,
       coverage: this.coverage,
       session: this.session,
       slack: this.slack,

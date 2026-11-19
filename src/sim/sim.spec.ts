@@ -42,6 +42,14 @@ describe("simulator", () => {
     expect(first.ok, first.failure ?? "").toBe(true);
     expect(second).toEqual(first);
     expect(secondTrace).toEqual(firstTrace);
+    // A run without a trace builds no lines and must run the same schedule:
+    // the same steps and the same session as the traced run of its seed.
+    for (const seed of [17, 18, 19]) {
+      const traced = await runSimulation({ seed, actions: 30, trace: [] });
+      const untraced = await runSimulation({ seed, actions: 30 });
+      expect(untraced.steps, `seed ${seed}`).toBe(traced.steps);
+      expect(untraced.session, `seed ${seed}`).toEqual(traced.session);
+    }
     const differentTrace: string[] = [];
     await runSimulation({ seed: 18, actions: 30, trace: differentTrace });
     expect(differentTrace).not.toEqual(firstTrace);

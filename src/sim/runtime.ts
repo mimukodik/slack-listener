@@ -56,7 +56,12 @@ function assert(condition: boolean, message: string): asserts condition {
 
 export class SimRuntime {
   readonly choices: Choices;
+  // One line per scheduler event, kept only when traced, since building the
+  // lines is a measurable part of a short run; entries counts them either
+  // way.
   readonly trace: string[] = [];
+  private entriesValue = 0;
+  private readonly traced: boolean;
   private nowMsValue = 0;
   private epochValue = 0;
   private seq = 0;
@@ -66,10 +71,21 @@ export class SimRuntime {
   private opsThisTurnMax = opsPerTurnMax;
   private pausedUntilMs = 0;
 
-  constructor(seed: number, tape: readonly number[] = [], startMs = 0) {
+  constructor(
+    seed: number,
+    tape: readonly number[] = [],
+    startMs = 0,
+    traced = true,
+  ) {
     assert(Number.isInteger(seed), "seed is not an integer");
     this.choices = new Choices(seed, tape);
     this.nowMsValue = startMs;
+    this.traced = traced;
+  }
+
+  // The scheduler events so far, traced or not.
+  get entries(): number {
+    return this.entriesValue;
   }
 
   get nowMs(): number {
@@ -149,7 +165,9 @@ export class SimRuntime {
     assert(this.fiberCurrent === null, "a process is already running");
     this.epochValue += 1;
     this.pausedUntilMs = 0;
-    this.trace.push(`${this.nowMsValue} start ${this.epochValue}`);
+    this.entriesValue += 1;
+    if (this.traced)
+      this.trace.push(`${this.nowMsValue} start ${this.epochValue}`);
     const seeded = program.pipe(
       Effect.provideService(Clock.Clock, this.clock()),
       Random.withSeed(this.choices.int(2 ** 31)),
@@ -171,7 +189,8 @@ export class SimRuntime {
     const epoch = this.epochValue;
     assert(this.fiberCurrent !== null, "crash with no process running");
     this.fiberCurrent = null;
-    this.trace.push(`${this.nowMsValue} crash ${epoch}`);
+    this.entriesValue += 1;
+    if (this.traced) this.trace.push(`${this.nowMsValue} crash ${epoch}`);
     this.ready = this.ready.filter((t) => t.epoch !== epoch);
     this.timers = this.timers.filter((t) => t.epoch !== epoch);
     assert(
@@ -194,7 +213,8 @@ export class SimRuntime {
     const parked = this.ready.filter((task) => task.epoch === this.epochValue);
     this.ready = this.ready.filter((task) => task.epoch !== this.epochValue);
     for (const task of parked) this.at(until - this.nowMsValue, task.run);
-    this.trace.push(`${this.nowMsValue} sleep until ${until}`);
+    this.entriesValue += 1;
+    if (this.traced) this.trace.push(`${this.nowMsValue} sleep until ${until}`);
   }
 
   private live(epoch: number): boolean {
@@ -216,7 +236,9 @@ export class SimRuntime {
     const [task] = this.ready.splice(index, 1);
     assert(task !== undefined, "picked a task that is not there");
     this.opsThisTurnMax = this.turnBudget();
-    this.trace.push(`${this.nowMsValue} task ${index}/${size}`);
+    this.entriesValue += 1;
+    if (this.traced)
+      this.trace.push(`${this.nowMsValue} task ${index}/${size}`);
     // A crash drops its tasks; a task of a dead process here means something
     // outside the runtime woke it: a world timer, or a promise answered on
     // its behalf by something other than one of its own timers.
@@ -239,7 +261,8 @@ export class SimRuntime {
     assert(due.length > 0, "no due timer after a non-empty check");
     this.nowMsValue = dueMs;
     for (const timer of due.sort((a, b) => a.seq - b.seq)) {
-      this.trace.push(`${this.nowMsValue} timer ${timer.seq}`);
+      this.entriesValue += 1;
+      if (this.traced) this.trace.push(`${this.nowMsValue} timer ${timer.seq}`);
       this.ready.push({ epoch: timer.epoch, run: timer.fire });
     }
     return true;
