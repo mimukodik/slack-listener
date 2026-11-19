@@ -50,6 +50,9 @@ import {
   type StoredMessage,
 } from "./slack-fake.ts";
 
+// The tries R18's shell makes before it gives a reaction call up.
+const reactionTries = 3;
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 type Envelope = {
@@ -434,10 +437,18 @@ export class World {
             this.choices.chance(50)
           ) {
             this.coverage.reactionFaults += 1;
-            this.slack.reactionFaults.add(params.get("timestamp") ?? "");
+            const ts = params.get("timestamp") ?? "";
+            const call = `${method} ${ts}`;
+            const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
+            this.slack.reactionFailures.set(call, failures);
+            if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
             reject(new Error("simulated network failure"));
             return;
           }
+          if (method.startsWith("reactions."))
+            this.slack.reactionFailures.delete(
+              `${method} ${params.get("timestamp") ?? ""}`,
+            );
           if (
             (method === "conversations.history" ||
               method === "conversations.replies") &&
@@ -451,7 +462,14 @@ export class World {
             }),
           );
         },
-        this.latency(10, method.startsWith("conversations.") ? 5000 : 100),
+        // Reaction calls are as slow as reads, so a removal could overtake
+        // its addition if the listener sent both at once.
+        this.latency(
+          10,
+          method.startsWith("conversations.") || method.startsWith("reactions.")
+            ? 5000
+            : 100,
+        ),
       );
     });
   };

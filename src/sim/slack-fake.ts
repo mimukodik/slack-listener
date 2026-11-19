@@ -157,8 +157,11 @@ export class SlackFake {
   // Per message ts, the reactions on it as "user:name", as Slack keeps them:
   // a token adds and removes only its own user's reaction.
   readonly reactions = new Map<string, Set<string>>();
-  // Messages a reaction call failed for (R18 allows giving up after retries).
-  readonly reactionFaults = new Set<string>();
+  // R18 lets the listener give up a call after its tries: the failures in a
+  // row per call ("method ts"), and the messages a call was given up for,
+  // which is the tries (three) failing in a row.
+  readonly reactionFailures = new Map<string, number>();
+  readonly reactionGivenUp = new Set<string>();
   private counter = 0;
 
   react(

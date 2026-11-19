@@ -465,7 +465,8 @@ export function runShell(
         );
 
       // R18: one reaction call, tried up to three times. Slack's answers that
-      // the reaction is already as asked count as done. It runs beside the
+      // the reaction is already as asked, or that the message is gone, count
+      // as done. It runs beside the
       // deliveries, so a failing call never holds one up.
       const react = (reaction: Reaction): Effect.Effect<void> => {
         const call =
@@ -481,7 +482,8 @@ export function runShell(
             Effect.catch((error) => {
               if (
                 error.reason === "already_reacted" ||
-                error.reason === "no_reaction"
+                error.reason === "no_reaction" ||
+                error.reason === "message_not_found"
               )
                 return Effect.void;
               if (tried + 1 < reactionAttempts)

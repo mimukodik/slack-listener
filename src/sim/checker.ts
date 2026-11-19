@@ -200,9 +200,9 @@ export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
 
 // R18 once the world is quiet: every message handed to the session carries
 // the own bot's reaction while the own side has not answered after it in its
-// thread, and none once it has. A message a reaction call failed for may be
-// either way, since the rule lets a failing call be given up; so may one
-// whose answer was deleted, which the listener may never have seen.
+// thread, and none once it has. A message a reaction call was given up for,
+// after its tries all failed in a row, may be either way, as the rule allows;
+// so may one whose answer was deleted, which the listener may never have seen.
 export function checkReactions(
   slack: SlackFake,
   session: SessionRecord[],
@@ -216,7 +216,7 @@ export function checkReactions(
   for (const ts of delivered) {
     const stored = slack.messages.get(ts);
     if (stored === undefined || stored.deleted) continue;
-    if (slack.reactionFaults.has(ts)) continue;
+    if (slack.reactionGivenUp.has(ts)) continue;
     const answers = ownAnswers(slack, ts);
     if (answers.some((answer) => answer.deleted)) continue;
     const has = slack.reactions.get(ts)?.has(`${people.ownBot}:${name}`);

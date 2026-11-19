@@ -143,6 +143,7 @@ export interface State {
   reactionInflight: boolean;
   reacted: Record<string, string>;
   answered: Record<string, string>;
+  reactionsDropped: number;
 }
 
 export interface StepResult {
@@ -180,6 +181,7 @@ export function initialState(config: CoreConfig): State {
     reactionInflight: false,
     reacted: {},
     answered: {},
+    reactionsDropped: 0,
   };
 }
 
@@ -345,11 +347,13 @@ function considerMessage(
   return state;
 }
 
+// A full queue drops the reaction, never a delivery; step logs the drop.
 function queueReactions(state: State, reactions: Reaction[]): State {
-  assert(
-    state.reactions.length + reactions.length <= state.config.queueLimit,
-    "reaction queue is full",
-  );
+  if (state.reactions.length + reactions.length > state.config.queueLimit)
+    return {
+      ...state,
+      reactionsDropped: state.reactionsDropped + reactions.length,
+    };
   return { ...state, reactions: [...state.reactions, ...reactions] };
 }
 
@@ -591,6 +595,11 @@ function prune(state: State, now: number): State {
 export function step(state: State, event: CoreEvent, now: number): StepResult {
   const effects: CoreEffect[] = [];
   const next = pumpReactions(reduce(state, event, now, effects), effects);
+  if (next.reactionsDropped > state.reactionsDropped)
+    effects.push({
+      type: "log",
+      message: `reaction queue full, ${next.reactionsDropped - state.reactionsDropped} reaction calls dropped`,
+    });
   assert(next.queue.length <= next.config.queueLimit, "queue over limit");
   assert(
     next.reactions.length <= next.config.queueLimit,
