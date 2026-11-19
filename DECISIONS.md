@@ -109,23 +109,28 @@ The whole CI check job went from 8 minutes 40 seconds on main to between 1 minut
 
 BER-2242, R18. The other side polled with a cron job, every 1 or 10 minutes, to learn whether a message had reached us, and some of those polls timed out. A reaction answers that in seconds. Greg approved the rule and asked for the simple version; the approval was relayed by the session that wrote the rule text. The session does nothing for it: there is no tool and no mark.
 
-- **The core decides, the shell calls Slack.** A delivered message gets an add, and an own-side post in its thread queues a remove for every reacted message before it there. Only one call runs at a time, so a removal never overtakes its addition. The queue is saved before a call starts, so a restart makes it again. Both calls are safe to repeat, because Slack's `already_reacted` and `no_reaction` count as done (`safe-to-repeat-compatible-across-versions`). The state file stays version 1. A file written before R18 reads with no reaction state, and older code ignores the new fields.
-- **A failing call is given up, loudly.** The shell tries it three times, 1 and 2 seconds apart, then logs the give-up with the message `ts` and Slack's error, never the text (`failure-path-is-part-of-the-contract`). The calls run beside the deliveries, so they hold none up. An app without `reactions:write` gets one such log line per call and delivers as before.
+- **The core decides, the shell calls Slack.** A delivered message gets an add, and an own-side post in its thread queues a remove for every reacted message before it there. Only one call runs at a time, so a removal never overtakes its addition. The queue is saved before a call starts, so a restart makes it again. Both calls are safe to repeat, because Slack's `already_reacted`, `no_reaction` and `message_not_found` count as done (`safe-to-repeat-compatible-across-versions`). The state file stays version 1. A file written before R18 reads with no reaction state, and older code ignores the new fields.
+- **A failing call is given up, loudly.** The shell tries it three times, 1 and 2 seconds apart, then logs the give-up with the message `ts` and Slack's error, never the text (`failure-path-is-part-of-the-contract`). The calls run beside the deliveries, so they hold none up. An app without `reactions:write` gets one such log line per call and delivers as before. The tries do not follow Slack's `Retry-After`, so a burst past the rate limit can give some reactions up, which the rule allows. A full reaction queue (100,000 calls) drops the reaction and logs it; it never stops the listener or holds up a delivery.
 - **What counts:** the own side is its people, typed or agent, and its bot. A top-level post answers only its own thread. An edit adds no reaction, and neither does a message that our side had already answered after it when it was delivered, for example both found by one catch-up. A reaction carries no text, so R3's "never posts to Slack" still holds, and `posting` does not gate R18.
 - **Anyone else's reaction:** Slack's `reactions.remove` takes off only the caller's own reaction, so the API itself keeps that part of the rule. The fake keeps reactions per user the same way. The simulator checks that every reaction call uses the bot token, the watched channel and the configured emoji.
-- **Simulator checks:** on each call, an add only for a message the session was handed, and a remove only after an own-side post later in its thread. At the end of a run, every delivered message carries the reaction exactly while our side has not answered after it. Two cases are excused at the end: a message a reaction call failed for, since the rule allows giving up, and one whose answer was deleted, which the listener may never have seen. While the API is failing, a reaction call fails half the time.
-- **Mutants, each restored from a copy:**
+- **Simulator checks:** on each call, an add only for a message the session was handed, and a remove only after an own-side post later in its thread. At the end of a run, every delivered message carries the reaction exactly while our side has not answered after it. Two cases are excused at the end. The first is a message a call was given up for, meaning the fake failed that call three times in a row, the shell's tries, since the rule allows giving up. The second is a message whose answer was deleted, which the listener may never have seen. While the API is failing, a reaction call fails half the time, and reaction calls take up to 5 seconds, like reads.
+- **Mutants, each restored from a copy.** The first review found that the end check excused any message a call had failed for once, so a shell with no retries passed every gate. The check now excuses only a call given up, and these counts are from after that fix:
 
   | Mutant                                         | 2000 seeds | Exhaustive 5    |
   | ---------------------------------------------- | ---------- | --------------- |
-  | an answer takes no reaction off                | 1,756 fail | passes          |
-  | the reaction is added when the delivery starts | 1,999 fail | fails after "A" |
-  | the reaction queue is not saved                | 17 fail    | passes          |
-  | an earlier answer is ignored                   | 1,298 fail | passes          |
+  | an answer takes no reaction off                | 1,839 fail | passes          |
+  | the reaction is added when the delivery starts | 1,718 fail | fails after "A" |
+  | the reaction queue is not saved                | 182 fail   | passes          |
+  | an earlier answer is ignored                   | 1,315 fail | passes          |
+  | the shell does not retry                       | 796 fail   | passes          |
+  | every queued call is sent at once              | 7 fail     | passes          |
+
+  One call at a time is checked weakly. A removal can overtake its addition only when the answer comes within a call's latency of the delivery, and the sampled world rarely answers that fast.
 
 - **Not taken:**
   - An exhaustive action for an own-side answer. The alphabet has none, so the exhaustive pass checks only additions, and the sampled pass covers removal. Adding a letter would grow every depth. The green pass still reaches the same 88,025 sequences at depth 7.
   - Reading back from Slack which reactions exist after a restart.
+- **Open:** RULES.md lists R18 under the step 2 heading, which says posting stays off until `posting: true`. The specifications say R18 applies in step 1, and the code does not gate it. Moving the rule needs the maintainer's approval, so it stays where it was written.
 - **Limit:** reaction state is pruned with the claims, after 8 days. An answer after that leaves the reaction on, as threads older than 7 days are out of scope already.
 
 ## Changes after the first green run
