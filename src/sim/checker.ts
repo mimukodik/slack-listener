@@ -199,8 +199,9 @@ export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
 }
 
 // R18 once the world is quiet: every message handed to the session carries
-// the own bot's reaction while the own side has not answered after it in its
-// thread and the session has not marked it done, and none once either holds.
+// the own bot's seen mark while the own side has not answered after it in its
+// thread and the session has not marked it done, and once either holds the
+// handled mark instead; never both, never neither.
 // A done the session sent but never heard back about, because the listener
 // crashed first, may or may not have been taken. A message a reaction call was given up for,
 // after its tries all failed in a row, may be either way, as the rule allows;
@@ -208,7 +209,7 @@ export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
 export function checkReactions(
   slack: SlackFake,
   session: SessionRecord[],
-  name: string,
+  names: { readonly seen: string; readonly handled: string },
   markSent: ReadonlySet<string>,
   markConfirmed: ReadonlySet<string>,
 ): string | null {
@@ -223,13 +224,20 @@ export function checkReactions(
     if (slack.reactionGivenUp.has(ts)) continue;
     const answers = ownAnswers(slack, ts);
     if (answers.some((answer) => answer.deleted)) continue;
-    const has = slack.reactions.get(ts)?.has(`${people.ownBot}:${name}`);
+    const on = slack.reactions.get(ts);
+    const hasSeen = on?.has(`${people.ownBot}:${names.seen}`) === true;
+    const hasHandled = on?.has(`${people.ownBot}:${names.handled}`) === true;
     if (markSent.has(ts) && !markConfirmed.has(ts)) continue;
     const handled = answers.length > 0 || markConfirmed.has(ts);
-    if (!handled && has !== true)
-      return `R18: delivered ${ts} has no reaction while our side has not answered or marked it`;
-    if (handled && has === true)
-      return `R18: ${ts} keeps its reaction after our side ${answers.length > 0 ? "answered" : "marked it done"}`;
+    const by = answers.length > 0 ? "answered" : "marked it done";
+    if (!handled && !hasSeen)
+      return `R18: delivered ${ts} has no seen mark while our side has not answered or marked it`;
+    if (!handled && hasHandled)
+      return `R18: ${ts} is marked handled while our side has not answered or marked it`;
+    if (handled && hasSeen)
+      return `R18: ${ts} keeps its seen mark after our side ${by}`;
+    if (handled && !hasHandled)
+      return `R18: ${ts} has no handled mark after our side ${by}`;
   }
   return null;
 }

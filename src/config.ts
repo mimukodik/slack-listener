@@ -13,8 +13,10 @@ export interface ListenerConfig {
   stateFile: string;
   lockFile: string;
   recordFile: string | null;
-  // R18: the reaction a delivered message gets, a Slack emoji name.
+  // R18: the reaction a delivered message gets, and the one it trades it for
+  // once handled; Slack emoji names, and never the same one.
   reaction: string;
+  handledReaction: string;
 }
 
 export class ConfigError extends Error {
@@ -99,10 +101,15 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
         "config: token references must be 1Password op:// references, never tokens",
       );
   }
-  const reaction = record.reaction ?? "eyes";
-  if (typeof reaction !== "string" || !/^[a-z0-9_+'-]+$/.test(reaction))
+  const reaction = emojiName(record, "reaction", "eyes");
+  const handledReaction = emojiName(
+    record,
+    "handledReaction",
+    "heavy_check_mark",
+  );
+  if (handledReaction === reaction)
     throw new ConfigError(
-      'config: "reaction" must be a Slack emoji name, such as "eyes"',
+      'config: "handledReaction" must differ from "reaction", or the swap would take the mark off',
     );
   return {
     core: {
@@ -128,7 +135,21 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
         ? expandHome(record.recordFile)
         : null,
     reaction,
+    handledReaction,
   };
+}
+
+function emojiName(
+  record: Record<string, unknown>,
+  key: string,
+  fallback: string,
+): string {
+  const value = record[key] ?? fallback;
+  if (typeof value !== "string" || !/^[a-z0-9_+'-]+$/.test(value))
+    throw new ConfigError(
+      `config: "${key}" must be a Slack emoji name, such as "${fallback}"`,
+    );
+  return value;
 }
 
 export function loadConfig(path: string): ListenerConfig {

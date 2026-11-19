@@ -64,14 +64,14 @@ Egy általad választott 1Password-vaultban hozz létre egy tételt „slack-lis
 
 ## Miért kell az egyes engedély
 
-| Engedély            | Miért van benne                                                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `groups:history`    | A privát csatorna üzeneteit és szálait olvassa, élőben és újracsatlakozás után is.                                                         |
-| `users:read`        | A user id-kból megjelenítési nevet csinál.                                                                                                 |
-| `chat:write`        | Már most benne van, így az appot csak egyszer kell létrehozni. A válaszküldés a beállításban ki van kapcsolva a 2. lépésig.                |
-| `reactions:write`   | A bot saját reakcióját teszi a kézbesített üzenetre, és leveszi, amikor a ti oldalatok válaszolt, vagy a munkamenet késznek jelölte (R18). |
-| `message.groups`    | Ez az esemény hozza az új üzeneteket Socket Mode-on.                                                                                       |
-| `connections:write` | Az app-szintű token ezzel nyitja a Socket Mode kapcsolatot.                                                                                |
+| Engedély            | Miért van benne                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `groups:history`    | A privát csatorna üzeneteit és szálait olvassa, élőben és újracsatlakozás után is.                                                                |
+| `users:read`        | A user id-kból megjelenítési nevet csinál.                                                                                                        |
+| `chat:write`        | Már most benne van, így az appot csak egyszer kell létrehozni. A válaszküldés a beállításban ki van kapcsolva a 2. lépésig.                       |
+| `reactions:write`   | A bot saját reakcióját teszi a kézbesített üzenetre, és pipára cseréli, amikor a ti oldalatok válaszolt, vagy a munkamenet késznek jelölte (R18). |
+| `message.groups`    | Ez az esemény hozza az új üzeneteket Socket Mode-on.                                                                                              |
+| `connections:write` | Az app-szintű token ezzel nyitja a Socket Mode kapcsolatot.                                                                                       |
 
 Az R18 előtt létrehozott appból hiányzik a `reactions:write`: add hozzá az OAuth & Permissions → Bot Token Scopes alatt, és telepítsd újra az appot. Addig minden reakcióhívás sikertelen; az eszköz naplózza, és ugyanúgy kézbesít, mint eddig.
 
@@ -97,7 +97,7 @@ A Slack egy app eseményeit szétosztja az app összes nyitott kapcsolata közö
 }
 ```
 
-A `reaction` elhagyható, alapértéke `"eyes"`; ez az emoji kerül a kézbesített üzenetre (R18).
+A `reaction` és a `handledReaction` elhagyható, alapértékük `"eyes"` és `"heavy_check_mark"`: az első kerül a kézbesített üzenetre, a második váltja fel, amikor az üzenet el van intézve. A kettő nem lehet azonos (R18).
 
 Ellenőrizd a repó gyökeréből:
 

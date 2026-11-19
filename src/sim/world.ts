@@ -180,6 +180,7 @@ export class World {
     lockFile: "/state/listener.lock",
     recordFile: "/state/frames.jsonl",
     reaction: "eyes",
+    handledReaction: "heavy_check_mark",
   };
   private socket: WorldSocket | null = null;
   private socketCounter = 0;
@@ -548,22 +549,30 @@ export class World {
         throw new SafetyViolation(`R3: unexpected Slack write/API ${method}`);
     }
   }
-  // R18: the own bot's reaction, only on a message the session was handed,
-  // and taken off only once the own side answered after it in its thread.
+  // R18: the own bot's two marks, only on a message the session was handed.
+  // The handled mark comes only once the own side answered after it in its
+  // thread or the session marked it done, and is never taken off; the seen
+  // mark comes off only once the handled one is on, so the message is never
+  // without a mark, unless the handled call was given up or the message is
+  // gone.
   private reaction(
     method: "reactions.add" | "reactions.remove",
     params: URLSearchParams,
   ): object {
     const ts = params.get("timestamp") ?? "";
     const name = params.get("name") ?? "";
+    const seen = this.config.reaction;
+    const handledName = this.config.handledReaction;
     if (
       params.get("channel") !== watchedChannel ||
-      name !== this.config.reaction
+      (name !== seen && name !== handledName)
     )
       throw new SafetyViolation(
         `R18: ${method} on ${params.get("channel") ?? ""} with ${name}`,
       );
     const action = method === "reactions.add" ? "add" : "remove";
+    const handled =
+      ownAnswers(this.slack, ts).length > 0 || this.markSent.has(ts);
     if (
       action === "add" &&
       this.options.control !== "nothing" &&
@@ -575,13 +584,27 @@ export class World {
       throw new SafetyViolation(
         `R18: reacted to ${ts} before it was delivered`,
       );
-    if (
-      action === "remove" &&
-      ownAnswers(this.slack, ts).length === 0 &&
-      !this.markSent.has(ts)
-    )
+    if (action === "add" && name === handledName && !handled)
+      throw new SafetyViolation(
+        `R18: marked ${ts} handled before our side answered or marked it done`,
+      );
+    if (action === "remove" && name === handledName)
+      throw new SafetyViolation(`R18: took the handled mark off ${ts}`);
+    if (action === "remove" && !handled)
       throw new SafetyViolation(
         `R18: took the reaction off ${ts} before our side answered or marked it done`,
+      );
+    const stored = this.slack.messages.get(ts);
+    if (
+      action === "remove" &&
+      stored !== undefined &&
+      !stored.deleted &&
+      !this.slack.reactionGivenUp.has(ts) &&
+      this.slack.reactions.get(ts)?.has(`${people.ownBot}:${handledName}`) !==
+        true
+    )
+      throw new SafetyViolation(
+        `R18: took the seen mark off ${ts} before the handled one was on`,
       );
     const answer = this.slack.react(action, people.ownBot, ts, name);
     if ((answer as { ok: boolean }).ok) {
@@ -1055,7 +1078,7 @@ export class World {
       this.failure ??= checkReactions(
         this.slack,
         this.session,
-        this.config.reaction,
+        { seen: this.config.reaction, handled: this.config.handledReaction },
         this.markSent,
         this.markConfirmed,
       );

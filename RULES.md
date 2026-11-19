@@ -90,10 +90,13 @@ both directions; a person typing is the exception.
   (`:eyes:`, set in configuration). It means "handed to the session", not "read".
   When a post of the own side appears in that message's thread (a top-level message's
   thread starts at its own `ts`), or the session marks the message done, the listener
-  removes its own reaction. Marking takes only the message's `ts`; it removes nothing
-  but the own reaction and sends no text. It never sets or removes anyone else's
-  reaction. A failed reaction call never delays or drops a delivery; it is retried a
-  bounded number of times and then given up. Reactions carry no text.
+  replaces its reaction with a second one (`:heavy_check_mark:`, set in
+  configuration): it adds the second, then removes the first. A message handled before
+  its delivery gets the second at once. The two must differ. Marking takes only the
+  message's `ts`; it changes nothing but the own reactions on that message and sends no
+  text. It never sets or removes anyone else's reaction. A failed reaction call never
+  delays or drops a delivery; it is retried a bounded number of times and then given
+  up. Reactions carry no text.
 
 ## Step 2: answering through the tool
 

@@ -19,7 +19,7 @@ import { defaultLimits, type TimerName } from "./core.ts";
 import { channelInstructions } from "./format.ts";
 import { makeLog } from "./log.ts";
 import { ChannelServer } from "./mcp.ts";
-import { replaceTimer, runShell } from "./shell.ts";
+import { readSaved, replaceTimer, runShell } from "./shell.ts";
 import { redact, SlackApi } from "./slack-api.ts";
 import { msToTs } from "./slack.ts";
 
@@ -208,6 +208,68 @@ describe("configuration", () => {
       ConfigError,
     );
   });
+
+  it("R18: defaults the seen mark to eyes and the handled one to heavy_check_mark", () => {
+    const parse = (extra: object) =>
+      parseConfig(JSON.stringify({ ...base, ...extra }), "test.json");
+    expect(parse({})).toMatchObject({
+      reaction: "eyes",
+      handledReaction: "heavy_check_mark",
+    });
+    expect(parse({ handledReaction: "ballot_box_with_check" })).toMatchObject({
+      handledReaction: "ballot_box_with_check",
+    });
+  });
+
+  // The same name for both would add the handled mark and then take it off as
+  // the seen one, leaving a handled message without a mark.
+  it("R18: refuses one name for both marks, and a name that is not an emoji name", () => {
+    const parse = (extra: object) => () =>
+      parseConfig(JSON.stringify({ ...base, ...extra }), "test.json");
+    expect(parse({ handledReaction: "eyes" })).toThrow(/must differ/);
+    expect(
+      parse({
+        reaction: "white_check_mark",
+        handledReaction: "white_check_mark",
+      }),
+    ).toThrow(/must differ/);
+    expect(parse({ handledReaction: "two words" })).toThrow(ConfigError);
+  });
+});
+
+describe("the state file", () => {
+  // A file written before the handled mark queued only seen calls, without a
+  // mark; reading one must not turn its removals into removals of the
+  // handled mark (R18).
+  it("reads a reaction queue written before the handled mark as seen calls", async () => {
+    const before = {
+      version: 1,
+      caughtUpUntilMs: 1,
+      floorMs: 1,
+      claimed: {},
+      queue: [],
+      inflight: null,
+      held: [],
+      reactions: [
+        { action: "add", ts: "1795099500.661959" },
+        { action: "remove", ts: "1795099386.438339" },
+      ],
+      reacted: { "1795099500.661959": "1795099386.438339" },
+      answered: {},
+      marked: {},
+    };
+    const fileSystem = FileSystem.layerNoop({
+      readFileString: () => Effect.succeed(JSON.stringify(before)),
+    });
+    const saved = await Effect.runPromise(
+      readSaved("/state/old.json").pipe(Effect.provide(fileSystem)),
+    );
+    expect(saved?.reactions).toEqual([
+      { action: "add", mark: "seen", ts: "1795099500.661959" },
+      { action: "remove", mark: "seen", ts: "1795099386.438339" },
+    ]);
+    expect(saved?.handled).toEqual({});
+  });
 });
 
 describe("R6: tokens stay secret", () => {
@@ -315,6 +377,7 @@ const testConfig: ListenerConfig = {
   lockFile: "/state/C0WATCH001.lock",
   recordFile: null,
   reaction: "eyes",
+  handledReaction: "heavy_check_mark",
 };
 
 // Starts the whole shell on the test's stdio, a scripted fetch, the given
@@ -325,11 +388,25 @@ function startShell(
 ) {
   const stdio = session(dieOnNotification);
   const calls: string[] = [];
+  // R18: each reaction call as "method name", in order.
+  const reactionCalls: string[] = [];
   const files = new Map<string, string>();
-  const fetch = (async (input: string | URL | Request) => {
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = url.pathname.split("/").at(-1) ?? "";
     calls.push(method);
+    if (method.startsWith("reactions.")) {
+      const body = init?.body;
+      const text =
+        body instanceof Uint8Array
+          ? new TextDecoder().decode(body)
+          : typeof body === "string" || body instanceof URLSearchParams
+            ? body.toString()
+            : "";
+      reactionCalls.push(
+        `${method} ${new URLSearchParams(text).get("name") ?? ""}`,
+      );
+    }
     return new Response(JSON.stringify(slackBodies[method] ?? { ok: false }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -376,7 +453,7 @@ function startShell(
     stdio.lines.filter(
       (line) => line.method === "notifications/claude/channel",
     );
-  return { stdio, calls, files, done, notifications };
+  return { stdio, calls, reactionCalls, files, done, notifications };
 }
 
 function envelope(id: string, event: object) {
@@ -436,8 +513,8 @@ describe("the shell as an Effect program", () => {
     );
     expect(repliesAsked()).toBe(asked);
 
-    // R18: both deliveries get the reaction; our agent's answer in the
-    // thread takes both off, and is itself not delivered.
+    // R18: both deliveries get the seen mark; our agent's answer in the
+    // thread trades both for the handled one, and is itself not delivered.
     await until(
       () => shell.calls.filter((call) => call === "reactions.add").length === 2,
       "the reactions",
@@ -458,8 +535,16 @@ describe("the shell as an Effect program", () => {
         shell.calls.filter((call) => call === "reactions.remove").length === 2,
       "the reactions removed",
     );
+    expect(shell.reactionCalls).toEqual([
+      "reactions.add eyes",
+      "reactions.add eyes",
+      "reactions.add heavy_check_mark",
+      "reactions.remove eyes",
+      "reactions.add heavy_check_mark",
+      "reactions.remove eyes",
+    ]);
 
-    // R18: the session's done takes a reaction off without an answer.
+    // R18: the session's done trades the mark without an answer.
     const quiet = msToTs(Date.now() + 3);
     first.frame(
       envelope("E0004", {
@@ -471,7 +556,7 @@ describe("the shell as an Effect program", () => {
       }),
     );
     await until(
-      () => shell.calls.filter((call) => call === "reactions.add").length === 3,
+      () => shell.calls.filter((call) => call === "reactions.add").length === 5,
       "the third reaction",
     );
     shell.stdio.send({ jsonrpc: "2.0", id: 7, method: "tools/list" });
@@ -486,6 +571,11 @@ describe("the shell as an Effect program", () => {
         shell.calls.filter((call) => call === "reactions.remove").length === 3,
       "the reaction taken off by done",
     );
+    expect(shell.reactionCalls.slice(6)).toEqual([
+      "reactions.add eyes",
+      "reactions.add heavy_check_mark",
+      "reactions.remove eyes",
+    ]);
     expect(JSON.stringify(shell.stdio.lines)).toContain('"name":"done"');
     await until(
       () => JSON.stringify(shell.stdio.lines).includes(`Marked ${quiet} done`),

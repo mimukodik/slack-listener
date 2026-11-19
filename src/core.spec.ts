@@ -561,14 +561,16 @@ describe("R17: the parent a reply carries", () => {
 describe("R18: a reaction says the message reached the session", () => {
   const reactions = (d: Driver) =>
     d.effects.flatMap((e) =>
-      e.type === "react" ? [`${e.reaction.action} ${e.reaction.ts}`] : [],
+      e.type === "react"
+        ? [`${e.reaction.action} ${e.reaction.mark} ${e.reaction.ts}`]
+        : [],
     );
   const done = (d: Driver) => {
     const [head] = d.state.reactions;
     if (head !== undefined) d.send({ type: "reaction_done", reaction: head });
   };
 
-  it("adds the reaction once the message is delivered, and takes it off when our side answers in the thread", () => {
+  it("adds the seen mark once the message is delivered, and trades it for the handled one when our side answers in the thread", () => {
     const d = driver();
     d.connect();
     d.envelope(post(10, people.other));
@@ -576,9 +578,9 @@ describe("R18: a reaction says the message reached the session", () => {
     d.flush();
     expect(d.deliveries.map((x) => x.ts)).toEqual([ts(10), ts(11)]);
     // One call at a time: the second waits for the first to finish.
-    expect(reactions(d)).toEqual([`add ${ts(10)}`]);
+    expect(reactions(d)).toEqual([`add seen ${ts(10)}`]);
     done(d);
-    expect(reactions(d)).toEqual([`add ${ts(10)}`, `add ${ts(11)}`]);
+    expect(reactions(d)).toEqual([`add seen ${ts(10)}`, `add seen ${ts(11)}`]);
     done(d);
 
     d.envelope(
@@ -587,18 +589,20 @@ describe("R18: a reaction says the message reached the session", () => {
     d.envelope(post(13, people.other, { thread_ts: ts(10) }));
     d.flush();
     expect(d.deliveries.map((x) => x.ts)).toEqual([ts(10), ts(11), ts(13)]);
-    done(d);
-    done(d);
+    for (let i = 0; i < 4; i += 1) done(d);
+    // The handled mark goes on before the seen one comes off, per message.
     expect(reactions(d)).toEqual([
-      `add ${ts(10)}`,
-      `add ${ts(11)}`,
-      `remove ${ts(10)}`,
-      `remove ${ts(11)}`,
-      `add ${ts(13)}`,
+      `add seen ${ts(10)}`,
+      `add seen ${ts(11)}`,
+      `add handled ${ts(10)}`,
+      `remove seen ${ts(10)}`,
+      `add handled ${ts(11)}`,
+      `remove seen ${ts(11)}`,
+      `add seen ${ts(13)}`,
     ]);
   });
 
-  it("adds none to an edit, or to a message our side already answered after", () => {
+  it("adds none to an edit, and the handled mark at once to a message our side already answered after", () => {
     const d = driver();
     const answered = post(20, people.other);
     d.connect([
@@ -616,10 +620,10 @@ describe("R18: a reaction says the message reached the session", () => {
     });
     d.flush();
     expect(d.deliveries.map((x) => x.kind)).toEqual(["message", "edit"]);
-    expect(reactions(d)).toEqual([]);
+    expect(reactions(d)).toEqual([`add handled ${ts(20)}`]);
   });
 
-  it("the session's done takes the reaction off that message only, and a done before the reaction keeps it off", () => {
+  it("the session's done trades that message's mark only, and a done before the reaction gives the handled mark at once", () => {
     const d = driver();
     d.connect();
     d.envelope(post(10, people.other));
@@ -627,15 +631,16 @@ describe("R18: a reaction says the message reached the session", () => {
     d.flush();
     done(d);
     done(d);
-    expect(reactions(d)).toEqual([`add ${ts(10)}`, `add ${ts(11)}`]);
+    expect(reactions(d)).toEqual([`add seen ${ts(10)}`, `add seen ${ts(11)}`]);
     d.send({ type: "marked_done", ts: ts(11) });
     done(d);
     expect(reactions(d)).toEqual([
-      `add ${ts(10)}`,
-      `add ${ts(11)}`,
-      `remove ${ts(11)}`,
+      `add seen ${ts(10)}`,
+      `add seen ${ts(11)}`,
+      `add handled ${ts(11)}`,
+      `remove seen ${ts(11)}`,
     ]);
-    // Marked between the write and its delivered event: no reaction at all.
+    // Marked between the write and its delivered event: the handled mark only.
     let state = initialState(simConfig());
     const effects: CoreEffect[] = [];
     const run = (event: CoreEvent, at: number) => {
@@ -660,7 +665,12 @@ describe("R18: a reaction says the message reached the session", () => {
     expect(state.inflight?.ts).toBe(ts(20));
     run({ type: "marked_done", ts: ts(20) }, simStartMs + 30_001);
     run({ type: "delivered", key: `m:${ts(20)}` }, simStartMs + 30_002);
-    expect(effects.filter((e) => e.type === "react")).toEqual([]);
+    expect(effects.filter((e) => e.type === "react")).toEqual([
+      {
+        type: "react",
+        reaction: { action: "add", mark: "handled", ts: ts(20) },
+      },
+    ]);
   });
 
   it("done for a message this listener never took in changes nothing", () => {
@@ -680,9 +690,9 @@ describe("R18: a reaction says the message reached the session", () => {
     d.connect();
     d.envelope(post(10, people.other));
     d.flush();
-    expect(reactions(d)).toEqual([`add ${ts(10)}`]);
+    expect(reactions(d)).toEqual([`add seen ${ts(10)}`]);
     const restarted = d.crash();
-    expect(reactions(restarted)).toEqual([`add ${ts(10)}`]);
+    expect(reactions(restarted)).toEqual([`add seen ${ts(10)}`]);
     expect(restarted.deliveries).toEqual([]);
   });
 });

@@ -31,13 +31,13 @@ export interface ChannelServerOptions {
   log: (line: string) => Effect.Effect<void>;
 }
 
-// R18: the session marks a message done when it needs no reply, which takes
-// the listener's reaction off it. The tool takes a ts and nothing else, so no
+// R18: the session marks a message done when it needs no reply, which turns
+// the listener's reaction on it into the handled mark. The tool takes a ts and nothing else, so no
 // text of the session's can reach Slack through it.
 const doneTool = {
   name: "done",
   description:
-    "Mark a Slack message from this channel as handled when it needs no reply. The listener then takes its own reaction off the message, which tells the sender you have dealt with it. Answering in the message's thread does the same, so you need this only when you do not answer.",
+    "Mark a Slack message from this channel as handled when it needs no reply. The listener then turns its reaction on the message into a check mark, which tells the sender you have dealt with it. Answering in the message's thread does the same, so you need this only when you do not answer.",
   inputSchema: {
     type: "object",
     properties: {
@@ -210,7 +210,7 @@ export class ChannelServer {
       const taken = yield* Deferred.await(decided);
       yield* taken
         ? answer(
-            `Marked ${ts} done; the listener's reaction comes off it, or is never added.`,
+            `Marked ${ts} done; the listener's reaction on it turns into a check mark.`,
             false,
           )
         : answer(

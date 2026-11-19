@@ -41,10 +41,14 @@ export interface Delivery {
   possibleDuplicate: boolean;
 }
 
-// One reaction call for R18: add the own bot's reaction to a delivered
-// message, or remove it once the own side answered in its thread.
+// R18's two marks: seen while a delivered message waits for the own side,
+// handled once the own side answered in its thread or marked it done.
+export type ReactionMark = "seen" | "handled";
+
+// One reaction call for R18: add or remove one of the own bot's two marks.
 export interface Reaction {
   action: "add" | "remove";
+  mark: ReactionMark;
   ts: string;
 }
 
@@ -56,9 +60,11 @@ export interface Saved {
   queue: Delivery[];
   inflight: Delivery | null;
   held: Held[];
-  // R18. Files written before R18 lack these; reading one gives them empty.
+  // R18. Files written before R18 lack these; reading one gives them empty,
+  // and a queued call without a mark is a seen one.
   reactions: Reaction[];
   reacted: Record<string, string>;
+  handled: Record<string, number>;
   answered: Record<string, string>;
   marked: Record<string, number>;
 }
@@ -140,12 +146,13 @@ export interface State {
   inflight: Delivery | null;
   sinkAttempt: number;
   // R18: reaction calls in order, the head in flight when reactionInflight;
-  // reacted maps a message carrying the own reaction to its thread, answered
-  // a thread to the latest own-side post in it, marked the messages the
-  // session marked done.
+  // reacted maps a message carrying the seen mark to its thread, handled the
+  // messages given the handled mark, answered a thread to the latest
+  // own-side post in it, marked the messages the session marked done.
   reactions: Reaction[];
   reactionInflight: boolean;
   reacted: Record<string, string>;
+  handled: Record<string, number>;
   answered: Record<string, string>;
   marked: Record<string, number>;
   reactionsDropped: number;
@@ -185,6 +192,7 @@ export function initialState(config: CoreConfig): State {
     reactions: [],
     reactionInflight: false,
     reacted: {},
+    handled: {},
     answered: {},
     marked: {},
     reactionsDropped: 0,
@@ -257,6 +265,7 @@ function snapshot(state: State): Saved {
     held: state.held,
     reactions: state.reactions,
     reacted: state.reacted,
+    handled: state.handled,
     answered: state.answered,
     marked: state.marked,
   };
@@ -364,8 +373,27 @@ function queueReactions(state: State, reactions: Reaction[]): State {
   return { ...state, reactions: [...state.reactions, ...reactions] };
 }
 
-// R18: an own-side post in a thread answers every message before it there;
-// their reactions come off. Seeing the same post again changes nothing.
+// R18: a message the own side handled trades its seen mark for the handled
+// one, the handled added first, so the sender never sees it without a mark.
+function handle(state: State, done: string[]): State {
+  if (done.length === 0) return state;
+  const reacted = { ...state.reacted };
+  const handled = { ...state.handled };
+  for (const ts of done) {
+    delete reacted[ts];
+    handled[ts] = tsToMs(ts);
+  }
+  return queueReactions(
+    { ...state, reacted, handled },
+    done.flatMap((ts): Reaction[] => [
+      { action: "add", mark: "handled", ts },
+      { action: "remove", mark: "seen", ts },
+    ]),
+  );
+}
+
+// R18: an own-side post in a thread answers every message before it there.
+// Seeing the same post again changes nothing.
 function noteAnswer(state: State, message: SlackMessage): State {
   const threadTs = message.thread_ts ?? message.ts;
   const latest = state.answered[threadTs];
@@ -380,38 +408,43 @@ function noteAnswer(state: State, message: SlackMessage): State {
     .map(([ts]) => ts)
     .sort(compareTs);
   if (answered === state.answered && answeredHere.length === 0) return state;
-  const reacted = { ...state.reacted };
-  for (const ts of answeredHere) delete reacted[ts];
-  return queueReactions(
-    { ...state, answered, reacted },
-    answeredHere.map((ts) => ({ action: "remove", ts })),
-  );
+  return handle({ ...state, answered }, answeredHere);
 }
 
-// R18: a message handed to the session gets the own reaction, unless the own
-// side already answered after it in its thread or the session marked it done.
-// An edit adds none.
+// R18: a message handed to the session gets the seen mark, or the handled
+// one at once when the own side already answered after it in its thread or
+// the session marked it done. An edit gets none.
 function reactTo(state: State, delivery: Delivery): State {
   if (
     delivery.kind !== "message" ||
     state.reacted[delivery.ts] !== undefined ||
-    state.marked[delivery.ts] !== undefined
+    state.handled[delivery.ts] !== undefined
   )
     return state;
   const answer = state.answered[delivery.threadTs];
-  if (answer !== undefined && compareTs(answer, delivery.ts) > 0) return state;
+  if (
+    state.marked[delivery.ts] !== undefined ||
+    (answer !== undefined && compareTs(answer, delivery.ts) > 0)
+  )
+    return queueReactions(
+      {
+        ...state,
+        handled: { ...state.handled, [delivery.ts]: tsToMs(delivery.ts) },
+      },
+      [{ action: "add", mark: "handled", ts: delivery.ts }],
+    );
   return queueReactions(
     {
       ...state,
       reacted: { ...state.reacted, [delivery.ts]: delivery.threadTs },
     },
-    [{ action: "add", ts: delivery.ts }],
+    [{ action: "add", mark: "seen", ts: delivery.ts }],
   );
 }
 
 // R18: the session marked a message done. Only a message this listener took
-// in counts; the mark is kept, so a mark made before the reaction was added
-// still keeps it off.
+// in counts; the mark is kept, so a mark made before the delivered event
+// gives the message the handled mark straight away.
 function markDone(state: State, ts: string, effects: CoreEffect[]): State {
   if (state.claimed[`m:${ts}`] === undefined) {
     effects.push({
@@ -422,12 +455,10 @@ function markDone(state: State, ts: string, effects: CoreEffect[]): State {
   }
   if (state.marked[ts] !== undefined) return state;
   const marked = { ...state.marked, [ts]: tsToMs(ts) };
-  if (state.reacted[ts] === undefined) return { ...state, marked };
-  const reacted = { ...state.reacted };
-  delete reacted[ts];
-  return queueReactions({ ...state, marked, reacted }, [
-    { action: "remove", ts },
-  ]);
+  return handle(
+    { ...state, marked },
+    state.reacted[ts] === undefined ? [] : [ts],
+  );
 }
 
 // One reaction call at a time, so a removal never overtakes its addition.
@@ -618,6 +649,10 @@ function prune(state: State, now: number): State {
   for (const [ts, thread] of Object.entries(state.reacted)) {
     if (tsToMs(ts) >= horizon) reacted[ts] = thread;
   }
+  const handled: Record<string, number> = {};
+  for (const [ts, at] of Object.entries(state.handled)) {
+    if (at >= horizon) handled[ts] = at;
+  }
   const answered: Record<string, string> = {};
   for (const [thread, ts] of Object.entries(state.answered)) {
     if (tsToMs(ts) >= horizon) answered[thread] = ts;
@@ -626,7 +661,7 @@ function prune(state: State, now: number): State {
   for (const [ts, at] of Object.entries(state.marked)) {
     if (at >= horizon) marked[ts] = at;
   }
-  return { ...state, claimed, reacted, answered, marked };
+  return { ...state, claimed, reacted, handled, answered, marked };
 }
 
 export function step(state: State, event: CoreEvent, now: number): StepResult {
@@ -673,6 +708,7 @@ function reduce(
             held: [...saved.held],
             reactions: [...saved.reactions],
             reacted: { ...saved.reacted },
+            handled: { ...saved.handled },
             answered: { ...saved.answered },
             marked: { ...saved.marked },
           }
@@ -831,6 +867,7 @@ function reduce(
       if (
         !state.reactionInflight ||
         head?.action !== event.reaction.action ||
+        head.mark !== event.reaction.mark ||
         head.ts !== event.reaction.ts
       )
         return state;
