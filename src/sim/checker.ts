@@ -4,8 +4,10 @@ import type { SessionRecord } from "./simulator.ts";
 import {
   labelAllowed,
   labelConfigured,
+  people,
   watchedChannel,
   type SlackFake,
+  type StoredMessage,
 } from "./slack-fake.ts";
 
 export class SafetyViolation extends Error {
@@ -177,6 +179,53 @@ function checkFraming(
     throw new SafetyViolation(
       `R17: delivery ${delivery.key} lacks ts or thread_ts`,
     );
+}
+
+const ownLabels = new Set(["own_typed", "own_agent", "own_bot"]);
+
+// The own side's posts in the thread of the message at ts, after it (R18).
+export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
+  const target = slack.messages.get(ts);
+  if (target === undefined) return [];
+  const thread = target.threadTs ?? target.ts;
+  return [...slack.messages.values()].filter(
+    (m) =>
+      m.channel === watchedChannel &&
+      !m.noise &&
+      ownLabels.has(m.author.label) &&
+      (m.threadTs ?? m.ts) === thread &&
+      compareTs(m.ts, ts) > 0,
+  );
+}
+
+// R18 once the world is quiet: every message handed to the session carries
+// the own bot's reaction while the own side has not answered after it in its
+// thread, and none once it has. A message a reaction call failed for may be
+// either way, since the rule lets a failing call be given up; so may one
+// whose answer was deleted, which the listener may never have seen.
+export function checkReactions(
+  slack: SlackFake,
+  session: SessionRecord[],
+  name: string,
+): string | null {
+  const delivered = new Set(
+    session
+      .filter((record) => record.delivery.kind === "message")
+      .map((record) => record.delivery.ts),
+  );
+  for (const ts of delivered) {
+    const stored = slack.messages.get(ts);
+    if (stored === undefined || stored.deleted) continue;
+    if (slack.reactionFaults.has(ts)) continue;
+    const answers = ownAnswers(slack, ts);
+    if (answers.some((answer) => answer.deleted)) continue;
+    const has = slack.reactions.get(ts)?.has(`${people.ownBot}:${name}`);
+    if (answers.length === 0 && has !== true)
+      return `R18: delivered ${ts} has no reaction while our side has not answered`;
+    if (answers.length > 0 && has === true)
+      return `R18: ${ts} keeps its reaction after our side answered`;
+  }
+  return null;
 }
 
 export function checkProgress(

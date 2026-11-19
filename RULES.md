@@ -112,10 +112,18 @@ posting stays off until `posting: true` is set in the configuration.
 - **R15. A post is made once.** A reply the tool accepted appears in the thread
   exactly once. When Slack's answer is lost, the tool checks the thread before trying
   again, and reports a post it cannot confirm as unconfirmed, never as sent.
+- **R18. A reaction says the message reached the session.** When a message is
+  delivered under R10, the listener adds one reaction from the own bot to it
+  (`:eyes:`, set in configuration). It means "handed to the session", not "read".
+  When a post of the own side appears in that message's thread (a top-level message's
+  thread starts at its own `ts`), the listener removes its own reaction. It never sets
+  or removes anyone else's reaction. A failed reaction call never delays or drops a
+  delivery; it is retried a bounded number of times and then given up. Reactions carry
+  no text. The session does nothing for this rule.
 
 ## Out of scope
 
-- Files, reactions and huddles.
+- Files and huddles. Reactions other than R18's.
 - An edit that leaves the text unchanged but moves Slack's edit time, made while the
   instance was disconnected or stopped. Catch-up cannot tell it from a real edit and
   delivers it once as `kind=edit`. Received live, it is dropped (R5).

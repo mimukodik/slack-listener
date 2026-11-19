@@ -105,6 +105,29 @@ BER-2207. Running the whole program (BER-2193) took depth 7 from about 6 seconds
 
 The whole CI check job went from 8 minutes 40 seconds on main to between 1 minute 55 seconds and 2 minutes 44 seconds on two runs of the same runner type. The 2000-seed pass gives byte-identical traces and results to main for every seed.
 
+## 2026-11-19: a reaction says the message arrived
+
+BER-2242, R18. The other side polled with a cron job, every 1 or 10 minutes, to learn whether a message had reached us, and some of those polls timed out. A reaction answers that in seconds. Greg approved the rule and asked for the simple version; the approval was relayed by the session that wrote the rule text. The session does nothing for it: there is no tool and no mark.
+
+- **The core decides, the shell calls Slack.** A delivered message gets an add, and an own-side post in its thread queues a remove for every reacted message before it there. Only one call runs at a time, so a removal never overtakes its addition. The queue is saved before a call starts, so a restart makes it again. Both calls are safe to repeat, because Slack's `already_reacted` and `no_reaction` count as done (`safe-to-repeat-compatible-across-versions`). The state file stays version 1. A file written before R18 reads with no reaction state, and older code ignores the new fields.
+- **A failing call is given up, loudly.** The shell tries it three times, 1 and 2 seconds apart, then logs the give-up with the message `ts` and Slack's error, never the text (`failure-path-is-part-of-the-contract`). The calls run beside the deliveries, so they hold none up. An app without `reactions:write` gets one such log line per call and delivers as before.
+- **What counts:** the own side is its people, typed or agent, and its bot. A top-level post answers only its own thread. An edit adds no reaction, and neither does a message that our side had already answered after it when it was delivered, for example both found by one catch-up. A reaction carries no text, so R3's "never posts to Slack" still holds, and `posting` does not gate R18.
+- **Anyone else's reaction:** Slack's `reactions.remove` takes off only the caller's own reaction, so the API itself keeps that part of the rule. The fake keeps reactions per user the same way. The simulator checks that every reaction call uses the bot token, the watched channel and the configured emoji.
+- **Simulator checks:** on each call, an add only for a message the session was handed, and a remove only after an own-side post later in its thread. At the end of a run, every delivered message carries the reaction exactly while our side has not answered after it. Two cases are excused at the end: a message a reaction call failed for, since the rule allows giving up, and one whose answer was deleted, which the listener may never have seen. While the API is failing, a reaction call fails half the time.
+- **Mutants, each restored from a copy:**
+
+  | Mutant                                         | 2000 seeds | Exhaustive 5    |
+  | ---------------------------------------------- | ---------- | --------------- |
+  | an answer takes no reaction off                | 1,756 fail | passes          |
+  | the reaction is added when the delivery starts | 1,999 fail | fails after "A" |
+  | the reaction queue is not saved                | 17 fail    | passes          |
+  | an earlier answer is ignored                   | 1,298 fail | passes          |
+
+- **Not taken:**
+  - An exhaustive action for an own-side answer. The alphabet has none, so the exhaustive pass checks only additions, and the sampled pass covers removal. Adding a letter would grow every depth. The green pass still reaches the same 88,025 sequences at depth 7.
+  - Reading back from Slack which reactions exist after a restart.
+- **Limit:** reaction state is pruned with the claims, after 8 days. An answer after that leaves the reaction on, as threads older than 7 days are out of scope already.
+
 ## Changes after the first green run
 
 | When            | What                                                                                                                                                                                  | Direction                              | Cause                                                                                                                                                                                         |
@@ -135,3 +158,6 @@ The whole CI check job went from 8 minutes 40 seconds on main to between 1 minut
 | 11-18, BER-2193 | progress ends on externally observed quiescence, with a hard bound after wake                                                                                                         | terminal observation corrected         | paginated catch-up can exceed a fixed grace period; periodic saves are not network activity                                                                                                   |
 | 11-18, BER-2207 | exhaustive pass runs only the children a prefix reports valid, split across worker threads                                                                                            | same sequences, count pinned           | speed; a spec checks the prediction and the split against full runs                                                                                                                           |
 | 11-18, BER-2216 | the 2000-seed pass runs on the worker pool, failures joined in seed order                                                                                                             | same runs                              | speed; a spec compares split and single-threaded failures, but its seeds do not fail, so no committed check guards failure order (a planted mutation failing 398 of 400 seeds kept the order) |
+| 11-19, BER-2242 | R18 added: the own bot's reaction on a delivered message, taken off when our side answers in its thread; `reactions:write`                                                            | rule added                             | Greg's decision: the other side polled to learn whether a message arrived                                                                                                                     |
+| 11-19, BER-2242 | fake: reactions kept per user, a reaction call fails half the time while the API fails; checker: R18 on each call and at the end of a run                                             | fake and checker added                 | R18                                                                                                                                                                                           |
+| 11-19, BER-2242 | the R2 crash spec finds the in-flight save by its content, not its position                                                                                                           | test corrected                         | R18 adds a save after it                                                                                                                                                                      |
