@@ -25,11 +25,12 @@ flowchart LR
 ```
 
 - **Inbound:** the tool runs as a child process of the session, talks to it over MCP (stdio), and hands each message over as a `<channel source="slack-listener">` event. Each message carries its `channel`, `ts`, `thread_ts`, the author's id and name, and the time it was posted. A thread reply also carries a link and, when the thread was started by a configured person or bot of either side, typed or agent, that author and the first line of the parent; otherwise it says only that the thread was started by someone outside the configured people (R17). Every line of the quoted text starts with `> `, so no text can pass for the tool's own lines. A connection that brings no frame from Slack for 5 minutes is replaced, and the catch-up after it starts from the last frame received, so a laptop sleep or a silently dead connection loses nothing (R7). Slack sends nothing on a quiet channel that the tool can see, so a quiet channel reconnects about every 5 minutes; each reconnect costs one connection call, one history read and the replies of recently active threads.
+- **Reaction:** once a message is handed to the session, the tool adds its own bot's `:eyes:` reaction to it (the emoji is `reaction` in the configuration), so the sender sees within seconds that it arrived. When the own side posts in that message's thread, the tool takes the reaction off. It never touches anyone else's reaction, and a failing reaction call is tried three times and given up without holding up a delivery (R18). The session does nothing for this.
 - **Outbound, in step 2:** the session answers with the `reply` tool. The answer goes out as the side's own bot, in the right thread. This stays switched off until the conditions in `RULES.md` step 2 are met.
 
 ## 3. The rules in brief
 
-The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7 and R8 at the end of every run; R6 and R11–R13 have unit tests, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
+The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7, R8 and R18 at the end of every run, with R18's calls also checked as they are made; R6 and R11–R13 have unit tests, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
 
 | Rule | Applies  | About                                                                                               |
 | ---- | -------- | --------------------------------------------------------------------------------------------------- |
@@ -45,6 +46,7 @@ The rule texts are in [`RULES.md`](../../RULES.md); this section only says when 
 | R10  | step 1   | the other side is heard, our own agents are not                                                     |
 | R16  | replaced | replaced by R17: an own-side agent who started a thread showed as an outsider                       |
 | R17  | step 1   | a thread reply can be answered on its own; the parent is quoted when any configured author wrote it |
+| R18  | step 1   | a reaction says the message reached the session, and comes off when our side answers                |
 | R11  | step 2   | a post says who wrote it                                                                            |
 | R12  | step 2   | agent loops stop                                                                                    |
 | R13  | step 2   | an acknowledgement is not answered                                                                  |

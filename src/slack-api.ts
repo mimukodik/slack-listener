@@ -211,6 +211,30 @@ export class SlackApi {
     );
   }
 
+  addReaction(
+    channel: string,
+    ts: string,
+    name: string,
+  ): Effect.Effect<void, SlackApiError> {
+    return this.call<SlackResponse>("reactions.add", {
+      channel,
+      timestamp: ts,
+      name,
+    }).pipe(Effect.asVoid);
+  }
+
+  removeReaction(
+    channel: string,
+    ts: string,
+    name: string,
+  ): Effect.Effect<void, SlackApiError> {
+    return this.call<SlackResponse>("reactions.remove", {
+      channel,
+      timestamp: ts,
+      name,
+    }).pipe(Effect.asVoid);
+  }
+
   canRead(channel: string): Effect.Effect<void, SlackApiError> {
     return this.call<SlackResponse>("conversations.history", {
       channel,

@@ -41,6 +41,13 @@ export interface Delivery {
   possibleDuplicate: boolean;
 }
 
+// One reaction call for R18: add the own bot's reaction to a delivered
+// message, or remove it once the own side answered in its thread.
+export interface Reaction {
+  action: "add" | "remove";
+  ts: string;
+}
+
 export interface Saved {
   version: 1;
   caughtUpUntilMs: number;
@@ -49,6 +56,10 @@ export interface Saved {
   queue: Delivery[];
   inflight: Delivery | null;
   held: Held[];
+  // R18. Files written before R18 lack these; reading one gives them empty.
+  reactions: Reaction[];
+  reacted: Record<string, string>;
+  answered: Record<string, string>;
 }
 
 export type TimerName = "reconnect" | "sink" | "tick" | "catch_up" | "release";
@@ -75,6 +86,7 @@ export type CoreEvent =
   | { type: "fetch_failed"; catchUpId: number; reason: string }
   | { type: "delivered"; key: string }
   | { type: "deliver_failed"; key: string; reason: string }
+  | { type: "reaction_done"; reaction: Reaction }
   | { type: "timer"; name: TimerName };
 
 export type CoreEffect =
@@ -88,6 +100,7 @@ export type CoreEffect =
       oldestMs: number;
     }
   | { type: "deliver"; delivery: Delivery }
+  | { type: "react"; reaction: Reaction }
   | { type: "save"; saved: Saved }
   | { type: "set_timer"; name: TimerName; atMs: number }
   | { type: "log"; message: string };
@@ -123,6 +136,14 @@ export interface State {
   queue: Delivery[];
   inflight: Delivery | null;
   sinkAttempt: number;
+  // R18: reaction calls in order, the head in flight when reactionInflight;
+  // reacted maps a message carrying the own reaction to its thread, answered
+  // a thread to the latest own-side post in it.
+  reactions: Reaction[];
+  reactionInflight: boolean;
+  reacted: Record<string, string>;
+  answered: Record<string, string>;
+  reactionsDropped: number;
 }
 
 export interface StepResult {
@@ -156,6 +177,11 @@ export function initialState(config: CoreConfig): State {
     queue: [],
     inflight: null,
     sinkAttempt: 0,
+    reactions: [],
+    reactionInflight: false,
+    reacted: {},
+    answered: {},
+    reactionsDropped: 0,
   };
 }
 
@@ -181,6 +207,16 @@ export function senderAllowed(
     return true;
   if (config.ownPeople.includes(user)) return !isAgentPost(message);
   return false;
+}
+
+// A post of the own side, typed or agent, by a person or the bot (R18).
+export function ownSidePost(
+  config: CoreConfig,
+  message: SlackMessage,
+): boolean {
+  const user = message.user;
+  if (user === undefined) return false;
+  return config.ownPeople.includes(user) || config.ownBots.includes(user);
 }
 
 export function configuredAuthor(
@@ -213,6 +249,9 @@ function snapshot(state: State): Saved {
     queue: state.queue,
     inflight: state.inflight,
     held: state.held,
+    reactions: state.reactions,
+    reacted: state.reacted,
+    answered: state.answered,
   };
 }
 
@@ -279,8 +318,19 @@ function consider(
       ? considerEdit(state, message)
       : state;
   }
-  if (!senderAllowed(config, message)) return state;
+  const seen = ownSidePost(config, message)
+    ? noteAnswer(state, message)
+    : state;
+  if (!senderAllowed(config, message)) return seen;
+  return considerMessage(seen, message, source);
+}
 
+function considerMessage(
+  state: State,
+  message: SlackMessage,
+  source: "live" | "history",
+): State {
+  const config = state.config;
   const messageKey = `m:${message.ts}`;
   const editKey = message.edited
     ? `e:${message.ts}:${message.edited.ts}`
@@ -295,6 +345,69 @@ function consider(
   }
   if (source === "history" && editKey) return considerEdit(state, message);
   return state;
+}
+
+// A full queue drops the reaction, never a delivery; step logs the drop.
+function queueReactions(state: State, reactions: Reaction[]): State {
+  if (state.reactions.length + reactions.length > state.config.queueLimit)
+    return {
+      ...state,
+      reactionsDropped: state.reactionsDropped + reactions.length,
+    };
+  return { ...state, reactions: [...state.reactions, ...reactions] };
+}
+
+// R18: an own-side post in a thread answers every message before it there;
+// their reactions come off. Seeing the same post again changes nothing.
+function noteAnswer(state: State, message: SlackMessage): State {
+  const threadTs = message.thread_ts ?? message.ts;
+  const latest = state.answered[threadTs];
+  const answered =
+    latest === undefined || compareTs(message.ts, latest) > 0
+      ? { ...state.answered, [threadTs]: message.ts }
+      : state.answered;
+  const answeredHere = Object.entries(state.reacted)
+    .filter(
+      ([ts, thread]) => thread === threadTs && compareTs(ts, message.ts) < 0,
+    )
+    .map(([ts]) => ts)
+    .sort(compareTs);
+  if (answered === state.answered && answeredHere.length === 0) return state;
+  const reacted = { ...state.reacted };
+  for (const ts of answeredHere) delete reacted[ts];
+  return queueReactions(
+    { ...state, answered, reacted },
+    answeredHere.map((ts) => ({ action: "remove", ts })),
+  );
+}
+
+// R18: a message handed to the session gets the own reaction, unless the own
+// side already answered after it in its thread. An edit adds none.
+function reactTo(state: State, delivery: Delivery): State {
+  if (delivery.kind !== "message" || state.reacted[delivery.ts] !== undefined)
+    return state;
+  const answer = state.answered[delivery.threadTs];
+  if (answer !== undefined && compareTs(answer, delivery.ts) > 0) return state;
+  return queueReactions(
+    {
+      ...state,
+      reacted: { ...state.reacted, [delivery.ts]: delivery.threadTs },
+    },
+    [{ action: "add", ts: delivery.ts }],
+  );
+}
+
+// One reaction call at a time, so a removal never overtakes its addition.
+// The queue is saved before the call starts, so a restart repeats it; both
+// calls are safe to repeat.
+function pumpReactions(state: State, effects: CoreEffect[]): State {
+  if (state.reactionInflight) return state;
+  const [next] = state.reactions;
+  if (next === undefined) return state;
+  const pumped = { ...state, reactionInflight: true };
+  effects.push({ type: "save", saved: snapshot(pumped) });
+  effects.push({ type: "react", reaction: next });
+  return pumped;
 }
 
 function claimSilently(state: State, message: SlackMessage): State {
@@ -468,13 +581,30 @@ function prune(state: State, now: number): State {
   for (const [key, at] of Object.entries(state.claimed)) {
     if (at >= horizon) claimed[key] = at;
   }
-  return { ...state, claimed };
+  const reacted: Record<string, string> = {};
+  for (const [ts, thread] of Object.entries(state.reacted)) {
+    if (tsToMs(ts) >= horizon) reacted[ts] = thread;
+  }
+  const answered: Record<string, string> = {};
+  for (const [thread, ts] of Object.entries(state.answered)) {
+    if (tsToMs(ts) >= horizon) answered[thread] = ts;
+  }
+  return { ...state, claimed, reacted, answered };
 }
 
 export function step(state: State, event: CoreEvent, now: number): StepResult {
   const effects: CoreEffect[] = [];
-  const next = reduce(state, event, now, effects);
+  const next = pumpReactions(reduce(state, event, now, effects), effects);
+  if (next.reactionsDropped > state.reactionsDropped)
+    effects.push({
+      type: "log",
+      message: `reaction queue full, ${next.reactionsDropped - state.reactionsDropped} reaction calls dropped`,
+    });
   assert(next.queue.length <= next.config.queueLimit, "queue over limit");
+  assert(
+    next.reactions.length <= next.config.queueLimit,
+    "reaction queue over limit",
+  );
   assert(next.generation >= state.generation, "generation went back");
   assert(
     next.inflight === null ||
@@ -504,6 +634,9 @@ function reduce(
               ? [{ ...saved.inflight, possibleDuplicate: true }, ...saved.queue]
               : [...saved.queue],
             held: [...saved.held],
+            reactions: [...saved.reactions],
+            reacted: { ...saved.reacted },
+            answered: { ...saved.answered },
           }
         : { ...state, caughtUpUntilMs: now, floorMs: now };
       next = connect(next, now, effects);
@@ -635,7 +768,10 @@ function reduce(
     }
     case "delivered": {
       if (state.inflight?.key !== event.key) return state;
-      const next = { ...state, inflight: null, sinkAttempt: 0 };
+      const next = reactTo(
+        { ...state, inflight: null, sinkAttempt: 0 },
+        state.inflight,
+      );
       effects.push({ type: "save", saved: snapshot(next) });
       return pump(next, effects);
     }
@@ -651,6 +787,16 @@ function reduce(
         atMs: now + backoffMs(state.config, state.sinkAttempt),
       });
       return { ...state, sinkAttempt: state.sinkAttempt + 1 };
+    }
+    case "reaction_done": {
+      const [head, ...rest] = state.reactions;
+      if (
+        !state.reactionInflight ||
+        head?.action !== event.reaction.action ||
+        head.ts !== event.reaction.ts
+      )
+        return state;
+      return { ...state, reactions: rest, reactionInflight: false };
     }
     case "timer":
       return onTimer(state, event.name, now, effects);

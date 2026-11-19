@@ -153,7 +153,9 @@ describe("R2: a message is delivered at most once", () => {
     d.connect();
     d.envelope(post(10, people.other), d.now + 10_000);
     d.send({ type: "timer", name: "release" }, d.now + 3000);
-    const inflightSave = d.effects.filter((e) => e.type === "save").at(-2);
+    const inflightSave = d.effects
+      .filter((e) => e.type === "save" && e.saved.inflight !== null)
+      .at(-1);
     expect(
       inflightSave?.type === "save" && inflightSave.saved.inflight?.ts,
     ).toBe(ts(10));
@@ -553,5 +555,78 @@ describe("R17: the parent a reply carries", () => {
       line: "status line",
     });
     expect(parentFrom(config, post(1, people.stranger)).allowed).toBe(false);
+  });
+});
+
+describe("R18: a reaction says the message reached the session", () => {
+  const reactions = (d: Driver) =>
+    d.effects.flatMap((e) =>
+      e.type === "react" ? [`${e.reaction.action} ${e.reaction.ts}`] : [],
+    );
+  const done = (d: Driver) => {
+    const [head] = d.state.reactions;
+    if (head !== undefined) d.send({ type: "reaction_done", reaction: head });
+  };
+
+  it("adds the reaction once the message is delivered, and takes it off when our side answers in the thread", () => {
+    const d = driver();
+    d.connect();
+    d.envelope(post(10, people.other));
+    d.envelope(post(11, people.other, { thread_ts: ts(10) }));
+    d.flush();
+    expect(d.deliveries.map((x) => x.ts)).toEqual([ts(10), ts(11)]);
+    // One call at a time: the second waits for the first to finish.
+    expect(reactions(d)).toEqual([`add ${ts(10)}`]);
+    done(d);
+    expect(reactions(d)).toEqual([`add ${ts(10)}`, `add ${ts(11)}`]);
+    done(d);
+
+    d.envelope(
+      post(12, people.own, { app_id: "ACLAUDE01", thread_ts: ts(10) }),
+    );
+    d.envelope(post(13, people.other, { thread_ts: ts(10) }));
+    d.flush();
+    expect(d.deliveries.map((x) => x.ts)).toEqual([ts(10), ts(11), ts(13)]);
+    done(d);
+    done(d);
+    expect(reactions(d)).toEqual([
+      `add ${ts(10)}`,
+      `add ${ts(11)}`,
+      `remove ${ts(10)}`,
+      `remove ${ts(11)}`,
+      `add ${ts(13)}`,
+    ]);
+  });
+
+  it("adds none to an edit, or to a message our side already answered after", () => {
+    const d = driver();
+    const answered = post(20, people.other);
+    d.connect([
+      post(21, people.own, { app_id: "ACLAUDE01", thread_ts: ts(20) }),
+      answered,
+    ]);
+    expect(d.deliveries.map((x) => x.ts)).toEqual([ts(20)]);
+    d.envelope({
+      type: "message",
+      subtype: "message_changed",
+      channel: watchedChannel,
+      ts: ts(30),
+      message: { ...answered, text: "changed", edited: { ts: ts(30) } },
+      previous_message: answered,
+    });
+    d.flush();
+    expect(d.deliveries.map((x) => x.kind)).toEqual(["message", "edit"]);
+    expect(reactions(d)).toEqual([]);
+  });
+
+  it("a reaction call not yet finished is made again after a crash", () => {
+    const d = driver();
+    d.connect();
+    d.envelope(post(10, people.other));
+    d.flush();
+    expect(reactions(d)).toEqual([`add ${ts(10)}`]);
+    const restarted = d.crash();
+    expect(reactions(restarted)).toEqual([`add ${ts(10)}`]);
+    expect(restarted.deliveries).toEqual([]);
   });
 });

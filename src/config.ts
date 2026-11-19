@@ -13,6 +13,8 @@ export interface ListenerConfig {
   stateFile: string;
   lockFile: string;
   recordFile: string | null;
+  // R18: the reaction a delivered message gets, a Slack emoji name.
+  reaction: string;
 }
 
 export class ConfigError extends Error {
@@ -97,6 +99,11 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
         "config: token references must be 1Password op:// references, never tokens",
       );
   }
+  const reaction = record.reaction ?? "eyes";
+  if (typeof reaction !== "string" || !/^[a-z0-9_+'-]+$/.test(reaction))
+    throw new ConfigError(
+      'config: "reaction" must be a Slack emoji name, such as "eyes"',
+    );
   return {
     core: {
       channel,
@@ -120,6 +127,7 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
       typeof record.recordFile === "string"
         ? expandHome(record.recordFile)
         : null,
+    reaction,
   };
 }
 

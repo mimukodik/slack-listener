@@ -32,6 +32,7 @@ import {
   type CoreEffect,
   type CoreEvent,
   type Delivery,
+  type Reaction,
   type Saved,
   type State,
   type TimerName,
@@ -107,6 +108,9 @@ export function readSaved(
       queue: parsed.queue ?? [],
       inflight: parsed.inflight ?? null,
       held: parsed.held ?? [],
+      reactions: parsed.reactions ?? [],
+      reacted: parsed.reacted ?? {},
+      answered: parsed.answered ?? {},
     };
     return saved;
   });
@@ -150,6 +154,8 @@ interface Live {
 }
 
 const decoder = new TextDecoder();
+
+const reactionAttempts = 3;
 
 function parseFrame(data: string): SocketEnvelope | null {
   try {
@@ -458,6 +464,42 @@ export function runShell(
           Effect.flatMap(dispatch),
         );
 
+      // R18: one reaction call, tried up to three times. Slack's answers that
+      // the reaction is already as asked, or that the message is gone, count
+      // as done. It runs beside the
+      // deliveries, so a failing call never holds one up.
+      const react = (reaction: Reaction): Effect.Effect<void> => {
+        const call =
+          reaction.action === "add"
+            ? api.addReaction(config.core.channel, reaction.ts, config.reaction)
+            : api.removeReaction(
+                config.core.channel,
+                reaction.ts,
+                config.reaction,
+              );
+        const attempt = (tried: number): Effect.Effect<void> =>
+          call.pipe(
+            Effect.catch((error) => {
+              if (
+                error.reason === "already_reacted" ||
+                error.reason === "no_reaction" ||
+                error.reason === "message_not_found"
+              )
+                return Effect.void;
+              if (tried + 1 < reactionAttempts)
+                return Effect.sleep(1000 * 2 ** tried).pipe(
+                  Effect.andThen(attempt(tried + 1)),
+                );
+              return log(
+                `reaction ${reaction.action} on ${reaction.ts} given up: ${error.reason}`,
+              );
+            }),
+          );
+        return attempt(0).pipe(
+          Effect.andThen(dispatch({ type: "reaction_done", reaction })),
+        );
+      };
+
       // A timer is a sleeping fiber; setting one of the same name replaces it.
       const setTimer = (name: TimerName, atMs: number): Effect.Effect<void> =>
         Effect.gen(function* () {
@@ -524,6 +566,10 @@ export function runShell(
                 threadTs: effect.threadTs,
                 messages,
               }),
+            );
+          case "react":
+            return FiberSet.run(tasks, react(effect.reaction)).pipe(
+              Effect.asVoid,
             );
           case "deliver":
             return Effect.sync(() =>

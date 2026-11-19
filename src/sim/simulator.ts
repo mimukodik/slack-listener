@@ -36,6 +36,9 @@ export interface Coverage {
   staleCatchUpReplies: number;
   injectionTexts: number;
   sameTextEdits: number;
+  reactionsAdded: number;
+  reactionsRemoved: number;
+  reactionFaults: number;
 }
 
 export interface SimResult {

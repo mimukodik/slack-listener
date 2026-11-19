@@ -154,7 +154,37 @@ function tombstone(stored: StoredMessage): SlackMessage {
 
 export class SlackFake {
   readonly messages = new Map<string, StoredMessage>();
+  // Per message ts, the reactions on it as "user:name", as Slack keeps them:
+  // a token adds and removes only its own user's reaction.
+  readonly reactions = new Map<string, Set<string>>();
+  // R18 lets the listener give up a call after its tries: the failures in a
+  // row per call ("method ts"), and the messages a call was given up for,
+  // which is the tries (three) failing in a row.
+  readonly reactionFailures = new Map<string, number>();
+  readonly reactionGivenUp = new Set<string>();
   private counter = 0;
+
+  react(
+    action: "add" | "remove",
+    user: string,
+    ts: string,
+    name: string,
+  ): object {
+    const stored = this.messages.get(ts);
+    if (stored === undefined || stored.deleted)
+      return { ok: false, error: "message_not_found" };
+    const on = this.reactions.get(ts) ?? new Set<string>();
+    this.reactions.set(ts, on);
+    const key = `${user}:${name}`;
+    if (action === "add") {
+      if (on.has(key)) return { ok: false, error: "already_reacted" };
+      on.add(key);
+    } else {
+      if (!on.has(key)) return { ok: false, error: "no_reaction" };
+      on.delete(key);
+    }
+    return { ok: true };
+  }
 
   nextTs(nowMs: number): string {
     this.counter = (this.counter + 1) % 1000;

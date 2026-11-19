@@ -20,7 +20,13 @@ import type { Delivery, Saved } from "../core.ts";
 import { makeLog } from "../log.ts";
 import { runListener } from "../program.ts";
 import { compareTs, type SlackMessage } from "../slack.ts";
-import { SafetyChecker, SafetyViolation, checkProgress } from "./checker.ts";
+import {
+  SafetyChecker,
+  SafetyViolation,
+  checkProgress,
+  checkReactions,
+  ownAnswers,
+} from "./checker.ts";
 import { host, withTripwire } from "./host.ts";
 import { SimRuntime } from "./runtime.ts";
 import {
@@ -43,6 +49,9 @@ import {
   type AuthorLabel,
   type StoredMessage,
 } from "./slack-fake.ts";
+
+// The tries R18's shell makes before it gives a reaction call up.
+const reactionTries = 3;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -155,6 +164,9 @@ export class World {
     staleCatchUpReplies: 0,
     injectionTexts: 0,
     sameTextEdits: 0,
+    reactionsAdded: 0,
+    reactionsRemoved: 0,
+    reactionFaults: 0,
   };
   private readonly checker: SafetyChecker;
   private readonly config: ListenerConfig = {
@@ -166,6 +178,7 @@ export class World {
     stateFile: "/state/listener.json",
     lockFile: "/state/listener.lock",
     recordFile: "/state/frames.jsonl",
+    reaction: "eyes",
   };
   private socket: WorldSocket | null = null;
   private socketCounter = 0;
@@ -392,6 +405,12 @@ export class World {
             ? body.toString()
             : "",
     );
+    if (
+      method.startsWith("reactions.") &&
+      new Headers(init?.headers).get("authorization") !==
+        "Bearer xoxb-simulation-secret"
+    )
+      throw new SafetyViolation(`R18: ${method} not made as the own bot`);
     const epoch = this.runtime.epoch;
     const generation = this.socketCounter;
     this.options.trace?.push(`${this.now} api ${method} ${params.toString()}`);
@@ -413,6 +432,24 @@ export class World {
             return;
           }
           if (
+            method.startsWith("reactions.") &&
+            this.apiFailing &&
+            this.choices.chance(50)
+          ) {
+            this.coverage.reactionFaults += 1;
+            const ts = params.get("timestamp") ?? "";
+            const call = `${method} ${ts}`;
+            const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
+            this.slack.reactionFailures.set(call, failures);
+            if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
+            reject(new Error("simulated network failure"));
+            return;
+          }
+          if (method.startsWith("reactions."))
+            this.slack.reactionFailures.delete(
+              `${method} ${params.get("timestamp") ?? ""}`,
+            );
+          if (
             (method === "conversations.history" ||
               method === "conversations.replies") &&
             generation !== this.socketCounter
@@ -425,7 +462,14 @@ export class World {
             }),
           );
         },
-        this.latency(10, method.startsWith("conversations.") ? 5000 : 100),
+        // Reaction calls are as slow as reads, so a removal could overtake
+        // its addition if the listener sent both at once.
+        this.latency(
+          10,
+          method.startsWith("conversations.") || method.startsWith("reactions.")
+            ? 5000
+            : 100,
+        ),
       );
     });
   };
@@ -488,10 +532,52 @@ export class World {
           params,
         );
       }
+      case "reactions.add":
+      case "reactions.remove":
+        return this.reaction(method, params);
       default:
         throw new SafetyViolation(`R3: unexpected Slack write/API ${method}`);
     }
   }
+  // R18: the own bot's reaction, only on a message the session was handed,
+  // and taken off only once the own side answered after it in its thread.
+  private reaction(
+    method: "reactions.add" | "reactions.remove",
+    params: URLSearchParams,
+  ): object {
+    const ts = params.get("timestamp") ?? "";
+    const name = params.get("name") ?? "";
+    if (
+      params.get("channel") !== watchedChannel ||
+      name !== this.config.reaction
+    )
+      throw new SafetyViolation(
+        `R18: ${method} on ${params.get("channel") ?? ""} with ${name}`,
+      );
+    const action = method === "reactions.add" ? "add" : "remove";
+    if (
+      action === "add" &&
+      this.options.control !== "nothing" &&
+      !this.session.some(
+        (record) =>
+          record.delivery.ts === ts && record.delivery.kind === "message",
+      )
+    )
+      throw new SafetyViolation(
+        `R18: reacted to ${ts} before it was delivered`,
+      );
+    if (action === "remove" && ownAnswers(this.slack, ts).length === 0)
+      throw new SafetyViolation(
+        `R18: took the reaction off ${ts} before our side answered`,
+      );
+    const answer = this.slack.react(action, people.ownBot, ts, name);
+    if ((answer as { ok: boolean }).ok) {
+      if (action === "add") this.coverage.reactionsAdded += 1;
+      else this.coverage.reactionsRemoved += 1;
+    }
+    return answer;
+  }
+
   private page(messages: SlackMessage[], params: URLSearchParams): object {
     const cursor = params.get("cursor");
     const all = cursor === null ? messages : this.pages.get(cursor);
@@ -907,6 +993,11 @@ export class World {
         return;
       }
       this.failure ??= progress;
+      this.failure ??= checkReactions(
+        this.slack,
+        this.session,
+        this.config.reaction,
+      );
       if (unacked)
         this.failure ??= "R8: a live socket left an envelope unacknowledged";
       if (this.pending > 0 || !quiet)

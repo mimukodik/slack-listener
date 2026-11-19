@@ -25,11 +25,12 @@ flowchart LR
 ```
 
 - **Befelé:** az eszköz a munkamenet gyermekfolyamataként fut, MCP-n (stdio) beszél vele, és `<channel source="slack-listener">` eseményként adja át az üzenetet. Az üzenet mellett mindig ott van a `channel`, a `ts`, a `thread_ts`, a szerző azonosítója és neve, valamint a küldés ideje. Szálbeli válasznál egy link is. Ha a szálat bármelyik oldal beállított embere vagy botja indította, akár kézzel, akár ágensként, akkor a szerző és a szülőüzenet első sora is; ha nem, csak annyi, hogy a szálat a beállított embereken kívül valaki indította (R17). Az idézett szöveg minden sora `> `-vel kezdődik, így semmilyen szöveg nem adhatja ki magát az eszköz saját sorának. Ha egy kapcsolaton 5 percig semmi nem jön a Slacktől, az eszköz újat nyit, és a felzárkózás az utolsó megkapott jeltől indul. Így alvó laptop vagy csendben megszakadt kapcsolat után sem vész el üzenet (R7). Csendes csatornán a Slack semmi olyat nem küld, amit az eszköz lát, ezért ilyenkor kb. 5 percenként újracsatlakozik. Ez alkalmanként egy kapcsolódási hívás, egy előzményolvasás és a friss szálak válaszainak lekérése.
+- **Reakció:** amint egy üzenet a munkamenethez került, az eszköz a saját botja nevében `:eyes:` reakciót tesz rá (az emoji a beállítás `reaction` mezője), így a küldő másodperceken belül látja, hogy megérkezett. Amikor a saját oldal ír az üzenet szálába, az eszköz leveszi a reakciót. Más reakciójához sosem nyúl, a sikertelen reakcióhívást háromszor próbálja, aztán feladja, és ez egy kézbesítést sem tart fel (R18). A munkamenetnek ehhez semmit sem kell tennie.
 - **Kifelé, a 2. lépésben:** a munkamenet a `reply` eszközzel válaszol. A válasz az oldal saját botjaként, a megfelelő szálba megy ki. Ez addig ki van kapcsolva, amíg a `RULES.md` 2. lépésének feltételei nem teljesülnek.
 
 ## 3. A szabályok röviden
 
-A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, melyik mikor él. Az R2, R3, R4, R5, R10 és R17 biztonsági szabályt és az R8 várakozási plafonját a szimulátor minden lépés után ellenőrzi, az R7-et és az R8-at minden futás végén. Az R6-ra és az R11–R13-ra egységteszt van, az R15-re még nincs. A szabályok azonosítója ott van a tesztek nevében. Egy azonosítót sosem használunk újra; a lecserélt vagy törölt szabály a helyén marad, megjelölve.
+A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, melyik mikor él. Az R2, R3, R4, R5, R10 és R17 biztonsági szabályt és az R8 várakozási plafonját a szimulátor minden lépés után ellenőrzi, az R7-et, az R8-at és az R18-at minden futás végén, az R18 hívásait pedig már a hívás pillanatában is. Az R6-ra és az R11–R13-ra egységteszt van, az R15-re még nincs. A szabályok azonosítója ott van a tesztek nevében. Egy azonosítót sosem használunk újra; a lecserélt vagy törölt szabály a helyén marad, megjelölve.
 
 | Szabály | Mikor él   | Miről szól                                                                                          |
 | ------- | ---------- | --------------------------------------------------------------------------------------------------- |
@@ -45,6 +46,7 @@ A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, 
 | R10     | 1. lépés   | a másik oldal hallatszik, a saját ágenseink nem                                                     |
 | R16     | lecserélve | helyette R17: a saját oldali ágens által nyitott szál kívülállóénak látszott                        |
 | R17     | 1. lépés   | a szálbeli válasz önmagában is megválaszolható; a szülőt idézi, ha bármelyik beállított szerző írta |
+| R18     | 1. lépés   | egy reakció jelzi, hogy az üzenet a munkamenethez ért, és lekerül, amikor a mi oldalunk válaszol    |
 | R11     | 2. lépés   | a poszt megmondja, ki írta                                                                          |
 | R12     | 2. lépés   | az ágensek hurka megáll                                                                             |
 | R13     | 2. lépés   | a nyugtázásra nem válaszolunk                                                                       |

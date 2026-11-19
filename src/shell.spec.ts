@@ -245,6 +245,8 @@ const slackBodies: Record<string, object> = {
   "conversations.replies": { ok: true, messages: [] },
   "users.info": { ok: true, user: { name: "other-person" } },
   "auth.test": { ok: true, url: "https://fake.invalid/" },
+  "reactions.add": { ok: true },
+  "reactions.remove": { ok: true },
 };
 
 const testConfig: ListenerConfig = {
@@ -265,6 +267,7 @@ const testConfig: ListenerConfig = {
   stateFile: "/state/C0WATCH001.state.json",
   lockFile: "/state/C0WATCH001.lock",
   recordFile: null,
+  reaction: "eyes",
 };
 
 // Starts the whole shell on the test's stdio, a scripted fetch, the given
@@ -385,6 +388,29 @@ describe("the shell as an Effect program", () => {
       "hello from the other side",
     );
     expect(repliesAsked()).toBe(asked);
+
+    // R18: both deliveries get the reaction; our agent's answer in the
+    // thread takes both off, and is itself not delivered.
+    await until(
+      () => shell.calls.filter((call) => call === "reactions.add").length === 2,
+      "the reactions",
+    );
+    first.frame(
+      envelope("E0003", {
+        type: "message",
+        channel: "C0WATCH001",
+        user: "U0OWN0001",
+        app_id: "A0AGENT01",
+        text: "our answer",
+        ts: msToTs(Date.now() + 2),
+        thread_ts: ts,
+      }),
+    );
+    await until(
+      () =>
+        shell.calls.filter((call) => call === "reactions.remove").length === 2,
+      "the reactions removed",
+    );
 
     first.frame({ type: "disconnect", reason: "refresh_requested" });
     await until(() => sockets[1]?.readyState === 1, "the second socket");
