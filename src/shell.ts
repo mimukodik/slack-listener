@@ -108,8 +108,12 @@ export function readSaved(
       queue: parsed.queue ?? [],
       inflight: parsed.inflight ?? null,
       held: parsed.held ?? [],
-      reactions: parsed.reactions ?? [],
+      reactions: (parsed.reactions ?? []).map((reaction) => ({
+        ...reaction,
+        mark: reaction.mark ?? "seen",
+      })),
       reacted: parsed.reacted ?? {},
+      handled: parsed.handled ?? {},
       answered: parsed.answered ?? {},
       marked: parsed.marked ?? {},
     };
@@ -472,14 +476,12 @@ export function runShell(
       // as done. It runs beside the
       // deliveries, so a failing call never holds one up.
       const react = (reaction: Reaction): Effect.Effect<void> => {
+        const name =
+          reaction.mark === "seen" ? config.reaction : config.handledReaction;
         const call =
           reaction.action === "add"
-            ? api.addReaction(config.core.channel, reaction.ts, config.reaction)
-            : api.removeReaction(
-                config.core.channel,
-                reaction.ts,
-                config.reaction,
-              );
+            ? api.addReaction(config.core.channel, reaction.ts, name)
+            : api.removeReaction(config.core.channel, reaction.ts, name);
         const attempt = (tried: number): Effect.Effect<void> =>
           call.pipe(
             Effect.catch((error) => {
@@ -494,7 +496,7 @@ export function runShell(
                   Effect.andThen(attempt(tried + 1)),
                 );
               return log(
-                `reaction ${reaction.action} on ${reaction.ts} given up: ${error.reason}`,
+                `reaction ${reaction.action} ${reaction.mark} on ${reaction.ts} given up: ${error.reason}`,
               );
             }),
           );

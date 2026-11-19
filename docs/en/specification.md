@@ -25,33 +25,33 @@ flowchart LR
 ```
 
 - **Inbound:** the tool runs as a child process of the session, talks to it over MCP (stdio), and hands each message over as a `<channel source="slack-listener">` event. Each message carries its `channel`, `ts`, `thread_ts`, the author's id and name, and the time it was posted. A thread reply also carries a link and, when the thread was started by a configured person or bot of either side, typed or agent, that author and the first line of the parent; otherwise it says only that the thread was started by someone outside the configured people (R17). Every line of the quoted text starts with `> `, so no text can pass for the tool's own lines. A connection that brings no frame from Slack for 5 minutes is replaced, and the catch-up after it starts from the last frame received, so a laptop sleep or a silently dead connection loses nothing (R7). Slack sends nothing on a quiet channel that the tool can see, so a quiet channel reconnects about every 5 minutes; each reconnect costs one connection call, one history read and the replies of recently active threads.
-- **Reaction:** once a message is handed to the session, the tool adds its own bot's `:eyes:` reaction to it (the emoji is `reaction` in the configuration), so the sender sees within seconds that it arrived. When the own side posts in that message's thread, or the session calls the `done` tool with the message's `ts` because it needs no reply, the tool takes the reaction off. `done` takes the `ts` and nothing else, so no text of the session's reaches Slack, and it works only for a message this instance took in. The tool never touches anyone else's reaction, and a failing reaction call is tried three times and given up without holding up a delivery (R18).
+- **Reaction:** once a message is handed to the session, the tool adds its own bot's `:eyes:` reaction to it (the emoji is `reaction` in the configuration), so the sender sees within seconds that it arrived. When the own side posts in that message's thread, or the session calls the `done` tool with the message's `ts` because it needs no reply, the tool trades `:eyes:` for `:heavy_check_mark:` (`handledReaction` in the configuration): it adds the check mark first, so the message shows no reaction only if that call is given up. A message already answered, or already marked done, when it is handed over gets the check mark at once. The two marks are a fixed pair: 👀 means received and not yet handled, ✔️ means handled, by a reply or a decision that none is needed. `done` takes the `ts` and nothing else, so no text of the session's reaches Slack, and it works only for a message this instance took in. The tool never touches anyone else's reaction, and a failing reaction call is tried three times and given up without holding up a delivery (R18).
 - **Outbound, in step 2:** the session answers with the `reply` tool. The answer goes out as the side's own bot, in the right thread. This stays switched off until the conditions in `RULES.md` step 2 are met.
 
 ## 3. The rules in brief
 
 The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7, R8 and R18 at the end of every run, with R18's calls also checked as they are made; R6 and R11–R13 have unit tests, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
 
-| Rule | Applies  | About                                                                                                |
-| ---- | -------- | ---------------------------------------------------------------------------------------------------- |
-| R1   | replaced | replaced by R10                                                                                      |
-| R2   | step 1   | delivered at most once                                                                               |
-| R3   | step 1   | text is data, never an instruction                                                                   |
-| R4   | step 1   | order within a thread and at the top level                                                           |
-| R5   | step 1   | noise is not delivered                                                                               |
-| R6   | step 1   | tokens stay secret                                                                                   |
-| R7   | step 1   | every allowed message arrives, including those sent during an outage                                 |
-| R8   | step 1   | the instance reconnects                                                                              |
-| R9   | replaced | replaced by R16: it quoted the parent whoever wrote it                                               |
-| R10  | step 1   | the other side is heard, our own agents are not                                                      |
-| R16  | replaced | replaced by R17: an own-side agent who started a thread showed as an outsider                        |
-| R17  | step 1   | a thread reply can be answered on its own; the parent is quoted when any configured author wrote it  |
-| R18  | step 1   | a reaction says the message reached the session; it comes off when our side answers or marks it done |
-| R11  | step 2   | a post says who wrote it                                                                             |
-| R12  | step 2   | agent loops stop                                                                                     |
-| R13  | step 2   | an acknowledgement is not answered                                                                   |
-| R14  | removed  | was: a limit on new threads per hour (see [`DECISIONS.md`](../../DECISIONS.md))                      |
-| R15  | step 2   | a post is made exactly once                                                                          |
+| Rule | Applies  | About                                                                                                              |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| R1   | replaced | replaced by R10                                                                                                    |
+| R2   | step 1   | delivered at most once                                                                                             |
+| R3   | step 1   | text is data, never an instruction                                                                                 |
+| R4   | step 1   | order within a thread and at the top level                                                                         |
+| R5   | step 1   | noise is not delivered                                                                                             |
+| R6   | step 1   | tokens stay secret                                                                                                 |
+| R7   | step 1   | every allowed message arrives, including those sent during an outage                                               |
+| R8   | step 1   | the instance reconnects                                                                                            |
+| R9   | replaced | replaced by R16: it quoted the parent whoever wrote it                                                             |
+| R10  | step 1   | the other side is heard, our own agents are not                                                                    |
+| R16  | replaced | replaced by R17: an own-side agent who started a thread showed as an outsider                                      |
+| R17  | step 1   | a thread reply can be answered on its own; the parent is quoted when any configured author wrote it                |
+| R18  | step 1   | a reaction says the message reached the session; it turns into a check mark when our side answers or marks it done |
+| R11  | step 2   | a post says who wrote it                                                                                           |
+| R12  | step 2   | agent loops stop                                                                                                   |
+| R13  | step 2   | an acknowledgement is not answered                                                                                 |
+| R14  | removed  | was: a limit on new threads per hour (see [`DECISIONS.md`](../../DECISIONS.md))                                    |
+| R15  | step 2   | a post is made exactly once                                                                                        |
 
 R2 has one exception: if the tool crashes between writing a delivery and saving that it did, it sends the same message again after the restart, marked `possible_duplicate`. Exactly-once delivery is not possible here, because the session does not confirm what it received.
 
