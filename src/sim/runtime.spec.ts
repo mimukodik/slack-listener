@@ -56,8 +56,12 @@ type Run = {
   readonly tripped: number;
 };
 
-async function runSeed(seed: number, crashAtMs: number | null): Promise<Run> {
-  const runtime = new SimRuntime(seed);
+async function runSeed(
+  seed: number,
+  crashAtMs: number | null,
+  traced = true,
+): Promise<Run & { entries: number }> {
+  const runtime = new SimRuntime(seed, [], 0, traced);
   const log: string[] = [];
   // The tripwire is on before the program starts: Effect runs a forked
   // program synchronously up to its first wait.
@@ -80,6 +84,7 @@ async function runSeed(seed: number, crashAtMs: number | null): Promise<Run> {
     trace: runtime.trace,
     log,
     tripped: tripped.length,
+    entries: runtime.entries,
   };
 }
 
@@ -98,6 +103,19 @@ describe("simulation runtime: one seed, one run", () => {
     }
     // The seed must matter: a runtime that ignored it would replay too.
     expect(distinct.size).toBeGreaterThan(seedCount * 0.9);
+  });
+
+  // Untraced runs skip building the lines, and must still run the same
+  // schedule: the same log and the same count of scheduler events.
+  it("an untraced run keeps no lines and runs the same schedule", async () => {
+    for (const seed of [2, 3, 8]) {
+      const traced = await runSeed(seed, seed * 7);
+      const untraced = await runSeed(seed, seed * 7, false);
+      expect(untraced.trace).toEqual([]);
+      expect(untraced.log).toEqual(traced.log);
+      expect(untraced.entries).toBe(traced.trace.length);
+      expect(traced.entries).toBe(traced.trace.length);
+    }
   });
 
   it("a crash drops the process's work and runs no finalizer", async () => {
