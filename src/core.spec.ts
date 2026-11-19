@@ -619,6 +619,62 @@ describe("R18: a reaction says the message reached the session", () => {
     expect(reactions(d)).toEqual([]);
   });
 
+  it("the session's done takes the reaction off that message only, and a done before the reaction keeps it off", () => {
+    const d = driver();
+    d.connect();
+    d.envelope(post(10, people.other));
+    d.envelope(post(11, people.other, { thread_ts: ts(10) }));
+    d.flush();
+    done(d);
+    done(d);
+    expect(reactions(d)).toEqual([`add ${ts(10)}`, `add ${ts(11)}`]);
+    d.send({ type: "marked_done", ts: ts(11) });
+    done(d);
+    expect(reactions(d)).toEqual([
+      `add ${ts(10)}`,
+      `add ${ts(11)}`,
+      `remove ${ts(11)}`,
+    ]);
+    // Marked between the write and its delivered event: no reaction at all.
+    let state = initialState(simConfig());
+    const effects: CoreEffect[] = [];
+    const run = (event: CoreEvent, at: number) => {
+      const result = step(state, event, at);
+      state = result.state;
+      effects.push(...result.effects);
+    };
+    run({ type: "started", saved: null }, simStartMs);
+    run({ type: "connected", generation: 1 }, simStartMs);
+    run({ type: "hello", generation: 1 }, simStartMs);
+    run({ type: "history_loaded", catchUpId: 1, messages: [] }, simStartMs);
+    run(
+      {
+        type: "envelope",
+        generation: 1,
+        envelopeId: "env-20",
+        message: post(20, people.other),
+      },
+      simStartMs + 20_000,
+    );
+    run({ type: "timer", name: "release" }, simStartMs + 30_000);
+    expect(state.inflight?.ts).toBe(ts(20));
+    run({ type: "marked_done", ts: ts(20) }, simStartMs + 30_001);
+    run({ type: "delivered", key: `m:${ts(20)}` }, simStartMs + 30_002);
+    expect(effects.filter((e) => e.type === "react")).toEqual([]);
+  });
+
+  it("done for a message this listener never took in changes nothing", () => {
+    const d = driver();
+    d.connect();
+    const before = d.state;
+    const effects = d.send({ type: "marked_done", ts: ts(99) });
+    expect(d.state).toEqual(before);
+    expect(effects).toEqual([
+      expect.objectContaining({ type: "log" }),
+      { type: "mark_answer", ts: ts(99), taken: false },
+    ]);
+  });
+
   it("a reaction call not yet finished is made again after a crash", () => {
     const d = driver();
     d.connect();

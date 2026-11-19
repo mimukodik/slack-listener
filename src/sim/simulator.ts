@@ -39,6 +39,7 @@ export interface Coverage {
   reactionsAdded: number;
   reactionsRemoved: number;
   reactionFaults: number;
+  doneMarks: number;
 }
 
 export interface SimResult {

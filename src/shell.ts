@@ -111,6 +111,7 @@ export function readSaved(
       reactions: parsed.reactions ?? [],
       reacted: parsed.reacted ?? {},
       answered: parsed.answered ?? {},
+      marked: parsed.marked ?? {},
     };
     return saved;
   });
@@ -298,6 +299,8 @@ export function runShell(
       const tasks = yield* FiberSet.make();
       const enrichment = new Enrichment(config, api);
       let state: State = initialState(config.core);
+      // done calls waiting for the core's answer, by message ts (R18).
+      const waiting = new Map<string, Deferred.Deferred<boolean>[]>();
       let live: Live | null = null;
 
       const dispatch = (event: CoreEvent): Effect.Effect<void> =>
@@ -567,6 +570,13 @@ export function runShell(
                 messages,
               }),
             );
+          case "mark_answer": {
+            const answers = waiting.get(effect.ts) ?? [];
+            waiting.delete(effect.ts);
+            return Effect.forEach(answers, (answer) =>
+              Deferred.succeed(answer, effect.taken),
+            ).pipe(Effect.asVoid);
+          }
           case "react":
             return FiberSet.run(tasks, react(effect.reaction)).pipe(
               Effect.asVoid,
@@ -611,6 +621,26 @@ export function runShell(
       );
 
       yield* dispatch({ type: "started", saved });
+      // R18: each message the session marks done becomes an event, after the
+      // saved state, and its call is answered by the core's mark_answer. The
+      // loop only moves marks between queues, so it runs outside the task
+      // set, whose join must end when a task fails.
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Queue.take(sink.marks).pipe(
+            Effect.flatMap((mark) =>
+              Effect.sync(() =>
+                waiting.set(mark.ts, [
+                  ...(waiting.get(mark.ts) ?? []),
+                  mark.answer,
+                ]),
+              ).pipe(
+                Effect.andThen(dispatch({ type: "marked_done", ts: mark.ts })),
+              ),
+            ),
+          ),
+        ),
+      );
       yield* Effect.raceFirst(
         Effect.raceFirst(Effect.forever(stepOnce), crashed),
         Deferred.await(sink.closed).pipe(

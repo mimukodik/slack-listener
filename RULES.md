@@ -85,6 +85,15 @@ both directions; a person typing is the exception.
   someone else's words verbatim can show up to 120 characters of them as the parent.
   The receiving session can then answer in the right thread without looking anything
   up.
+- **R18. A reaction says the message reached the session.** When a message is
+  delivered under R10, the listener adds one reaction from the own bot to it
+  (`:eyes:`, set in configuration). It means "handed to the session", not "read".
+  When a post of the own side appears in that message's thread (a top-level message's
+  thread starts at its own `ts`), or the session marks the message done, the listener
+  removes its own reaction. Marking takes only the message's `ts`; it removes nothing
+  but the own reaction and sends no text. It never sets or removes anyone else's
+  reaction. A failed reaction call never delays or drops a delivery; it is retried a
+  bounded number of times and then given up. Reactions carry no text.
 
 ## Step 2: answering through the tool
 
@@ -112,14 +121,6 @@ posting stays off until `posting: true` is set in the configuration.
 - **R15. A post is made once.** A reply the tool accepted appears in the thread
   exactly once. When Slack's answer is lost, the tool checks the thread before trying
   again, and reports a post it cannot confirm as unconfirmed, never as sent.
-- **R18. A reaction says the message reached the session.** When a message is
-  delivered under R10, the listener adds one reaction from the own bot to it
-  (`:eyes:`, set in configuration). It means "handed to the session", not "read".
-  When a post of the own side appears in that message's thread (a top-level message's
-  thread starts at its own `ts`), the listener removes its own reaction. It never sets
-  or removes anyone else's reaction. A failed reaction call never delays or drops a
-  delivery; it is retried a bounded number of times and then given up. Reactions carry
-  no text. The session does nothing for this rule.
 
 ## Out of scope
 
