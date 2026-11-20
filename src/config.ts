@@ -30,6 +30,10 @@ export const defaultConfigPath = join(
   "config.json",
 );
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function stringField(raw: Record<string, unknown>, key: string): string {
   const value = raw[key];
   if (typeof value !== "string" || value.trim() === "")
@@ -88,8 +92,8 @@ export function parseConfig(text: string, sourcePath: string): ListenerConfig {
       ? record.stateDir
       : "~/.local/state/slack-listener",
   );
-  const tokens = record.tokens as Record<string, unknown> | undefined;
-  if (typeof tokens !== "object" || tokens === null)
+  const tokens: unknown = record.tokens;
+  if (!isRecord(tokens))
     throw new ConfigError(
       'config: "tokens" must hold "bot" and "app" references',
     );

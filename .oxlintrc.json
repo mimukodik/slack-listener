@@ -56,7 +56,9 @@
     "typescript/use-unknown-in-catch-callback-variable": "error",
     "no-useless-catch": "error",
     "typescript/require-await": "error",
-    "typescript/promise-function-async": "error"
+    "typescript/promise-function-async": "error",
+    "typescript/strict-boolean-expressions": "error",
+    "typescript/no-unnecessary-condition": "error"
   },
   "overrides": [
     {
