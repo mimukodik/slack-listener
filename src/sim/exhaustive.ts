@@ -12,8 +12,8 @@ export { alphabet, type Action } from "./world.ts";
 // Every run takes the simplest choice; the tape is read-only, so one is shared.
 const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
 
-// Subtrees start at this length: 89 roots up to 8 actions, the largest about
-// 1.5% of depth 7, so a pool of up to 8 stays balanced.
+// Subtrees start at this length: 184 roots over the eleven letters, the
+// largest about 0.85% of depth 7, so a pool of up to 8 stays balanced.
 const split = 3;
 
 export interface ExhaustiveResult {
@@ -25,6 +25,13 @@ export interface ExhaustiveResult {
     deliveredByCatchUp: number;
     editsDelivered: number;
     repliesUnderOwnAgent: number;
+    // R18 (BER-2285): runs where a seen mark came off, where the session's
+    // done was confirmed, and where the armed failure hit a reaction call or
+    // a read.
+    seenMarksRemoved: number;
+    doneMarks: number;
+    failedReactionCalls: number;
+    failedReads: number;
   };
 }
 
@@ -38,6 +45,10 @@ export function emptyResult(bound: number): ExhaustiveResult {
       deliveredByCatchUp: 0,
       editsDelivered: 0,
       repliesUnderOwnAgent: 0,
+      seenMarksRemoved: 0,
+      doneMarks: 0,
+      failedReactionCalls: 0,
+      failedReads: 0,
     },
   };
 }
@@ -88,6 +99,13 @@ export async function explore(
       run.result.session.some((record) => record.delivery.isReply)
     )
       result.coverage.repliesUnderOwnAgent += 1;
+    if (run.result.coverage.reactionsRemoved > 0)
+      result.coverage.seenMarksRemoved += 1;
+    if (run.result.coverage.doneMarks > 0) result.coverage.doneMarks += 1;
+    if (run.failedOnce.some((method) => method.startsWith("reactions.")))
+      result.coverage.failedReactionCalls += 1;
+    if (run.failedOnce.some((method) => method.startsWith("conversations.")))
+      result.coverage.failedReads += 1;
     if (sequence.length < result.bound)
       for (const action of [...run.next].reverse())
         pending.push(sequence + action);

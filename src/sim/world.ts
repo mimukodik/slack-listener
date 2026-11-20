@@ -131,13 +131,44 @@ class WorldSocket implements Socket.WebSocketLike {
 }
 
 // The exhaustive pass's alphabet: two thread starters (A by the other side,
-// B by our own agent), a reply in each (a, b), an edit of the latest message
-// (e), a disconnect lasting one action (d), a crash at the next delivery (c)
-// and a duplicate of the last envelope (u).
-export const alphabet = ["A", "B", "a", "b", "e", "d", "c", "u"] as const;
+// B by our own agent), a reply by the other side in each (a, b), an edit of
+// the latest message (e), a disconnect lasting one action (d), a crash at the
+// next delivery (c), a duplicate of the last envelope (u), and three for R18
+// (BER-2285): our own agent's answer in A's thread (o), the session's done on
+// the latest message handed to it that it has not marked (m), and
+// the next Web API call the sampled faults can fail failing once (f). The
+// new letters come last, so a sequence without them runs as before.
+export const alphabet = [
+  "A",
+  "B",
+  "a",
+  "b",
+  "e",
+  "d",
+  "c",
+  "u",
+  "o",
+  "m",
+  "f",
+] as const;
 export type Action = (typeof alphabet)[number];
 const isAction = (value: string): value is Action =>
   (alphabet as readonly string[]).includes(value);
+
+function assert(condition: boolean, message: string): asserts condition {
+  if (!condition) throw new Error(`simulated world: ${message}`);
+}
+
+// The Web API calls the sampled world's faults can fail: reads of history and
+// replies other than a thread parent's one-message read, reaction calls and
+// connection opens. users.info and auth.test never fail there.
+function failable(method: string, params: URLSearchParams): boolean {
+  assert(method !== "", "a Web API call without a method");
+  assert(!method.includes("/"), `a Web API method with a path: ${method}`);
+  if (method.startsWith("reactions.") || method === "apps.connections.open")
+    return true;
+  return method.startsWith("conversations.") && params.get("limit") !== "1";
+}
 
 export class World {
   readonly runtime: SimRuntime;
@@ -208,9 +239,13 @@ export class World {
   private wakeAtMs = simStartMs;
   private choices;
   private readonly options: SimOptions;
+  // The exhaustive pass's f: the next failable Web API call fails once, as a
+  // sampled API fault fails it. failedOnce lists the methods it failed.
+  private failNext = false;
+  readonly failedOnce: string[] = [];
   // R18: the messages the simulated session sent done for, and those the
-  // listener confirmed. Only sampled runs mark, so the exhaustive pass is
-  // unchanged.
+  // listener confirmed. Sampled runs mark a fifth of their messages; the
+  // exhaustive pass marks only through its m.
   private readonly markSent = new Set<string>();
   private readonly markConfirmed = new Set<string>();
   private readonly markCalls = new Map<number, string>();
@@ -429,12 +464,17 @@ export class World {
     const epoch = this.runtime.epoch;
     const generation = this.socketCounter;
     this.options.trace?.push(`${this.now} api ${method} ${params.toString()}`);
+    // Taken when the call is made, so "the next call" is the next one the
+    // program starts. False in sampled runs, so the choices below are read
+    // exactly as before.
+    const failOnce = this.takeFailure(method, params);
     return new Promise<Response>((resolve, reject) => {
       this.answer(
         () => {
           if (epoch !== this.runtime.epoch)
             throw new Error("fetch answer crossed a crash");
           if (
+            (failOnce && !method.startsWith("reactions.")) ||
             (this.apiFailing &&
               params.get("limit") !== "1" &&
               method.startsWith("conversations.") &&
@@ -448,8 +488,7 @@ export class World {
           }
           if (
             method.startsWith("reactions.") &&
-            this.apiFailing &&
-            this.choices.chance(50)
+            (failOnce || (this.apiFailing && this.choices.chance(50)))
           ) {
             this.coverage.reactionFaults += 1;
             const ts = params.get("timestamp") ?? "";
@@ -488,6 +527,16 @@ export class World {
       );
     });
   };
+
+  // The exhaustive pass's f, taken by the first failable call after it.
+  private takeFailure(method: string, params: URLSearchParams): boolean {
+    if (!this.failNext || !failable(method, params)) return false;
+    assert(this.options.faults === false, "an armed failure in a sampled run");
+    assert(this.running, `${method} made while the listener is down`);
+    this.failNext = false;
+    this.failedOnce.push(method);
+    return true;
+  }
 
   private response(method: string, params: URLSearchParams): object {
     switch (method) {
@@ -743,6 +792,30 @@ export class World {
         Queue.offer(stdin, encoder.encode(`${JSON.stringify(call)}\n`)),
       );
     }, delay);
+  }
+  // The exhaustive pass's m targets the latest message handed to the session
+  // that it has not marked done. A message handed over before a crash counts:
+  // the session keeps it while the listener restarts, and the listener took
+  // it in before writing it.
+  private unmarkedDelivery(): string | null {
+    let latest: SessionRecord | null = null;
+    for (const record of this.session) {
+      assert(
+        record.crashesBefore <= this.crashes,
+        `${record.delivery.ts} handed over after a crash yet to come`,
+      );
+      if (
+        record.delivery.kind === "message" &&
+        !this.markSent.has(record.delivery.ts)
+      )
+        latest = record;
+    }
+    if (latest === null) return null;
+    assert(
+      this.slack.messages.has(latest.delivery.ts),
+      `handed ${latest.delivery.ts}, which Slack never had`,
+    );
+    return latest.delivery.ts;
   }
   private checkParent(delivery: Delivery, meta: Record<string, string>): void {
     const parent = this.expectedParents.get(delivery.threadTs);
@@ -1155,11 +1228,15 @@ export class World {
     next: Action[];
     result: SimResult;
     postedWhileDown: string[];
+    failedOnce: readonly string[];
   }> {
     let valid = true;
     let next: Action[] = [];
     let a: string | null = null;
     let b: string | null = null;
+    // Whether A's thread has a post of the other side after our last answer
+    // there; o answers only then, so it never answers its own answer.
+    let aOpen = false;
     let recover = false;
     let armedAge = 0;
     const postedWhileDown: string[] = [];
@@ -1201,6 +1278,12 @@ export class World {
           return this.running && !this.crashArmed;
         case "u":
           return this.lastEnvelope !== null && this.running;
+        case "o":
+          return a !== null && aOpen;
+        case "m":
+          return this.running && this.unmarkedDelivery() !== null;
+        case "f":
+          return !this.failNext;
       }
     };
     // allows and perform must agree; perform throws if allows let through an
@@ -1214,12 +1297,14 @@ export class World {
       switch (action) {
         case "A":
           a = post("other_person", undefined, "starter A");
+          aOpen = true;
           break;
         case "B":
           b = post("own_agent", undefined, "starter B");
           break;
         case "a":
           post("other_agent", present(a, "a"), `reply A ${index}`);
+          aOpen = true;
           break;
         case "b":
           post("other_person", present(b, "b"), `reply B ${index}`);
@@ -1256,6 +1341,17 @@ export class World {
           });
           break;
         }
+        case "o":
+          post("own_agent", present(a, "o"), `answer A ${index}`);
+          aOpen = false;
+          break;
+        case "m":
+          // Through the session's stdio, as the sampled session calls done.
+          this.markDone(present(this.unmarkedDelivery(), "m"), 0);
+          break;
+        case "f":
+          this.failNext = true;
+          break;
       }
     };
     for (let index = 0; index < sequence.length; index += 1) {
@@ -1285,6 +1381,12 @@ export class World {
       this.finish();
     });
     const result = await this.drive();
-    return { valid, next, result, postedWhileDown };
+    return {
+      valid,
+      next,
+      result,
+      postedWhileDown,
+      failedOnce: this.failedOnce,
+    };
   }
 }
