@@ -352,14 +352,15 @@ function considerMessage(
     ? `e:${message.ts}:${message.edited.ts}`
     : null;
   if (state.claimed[messageKey] === undefined) {
-    const keys = editKey ? [messageKey, editKey] : [messageKey];
+    const keys = editKey !== null ? [messageKey, editKey] : [messageKey];
     return enqueue(
       state,
       toDelivery(config, message, "message", messageKey),
       keys,
     );
   }
-  if (source === "history" && editKey) return considerEdit(state, message);
+  if (source === "history" && editKey !== null)
+    return considerEdit(state, message);
   return state;
 }
 

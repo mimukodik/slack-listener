@@ -30,12 +30,12 @@ const checkpoint = runInThisContext(
 ) as () => void;
 
 function drainSelfTest(): void {
-  let drained = false;
+  const drain = { done: false };
   void Promise.resolve().then(() => {
-    drained = true;
+    drain.done = true;
   });
   checkpoint();
-  if (!drained)
+  if (!drain.done)
     throw new Error(
       "simulation host: the microtask drain did not drain; the loop must start in a macrotask",
     );

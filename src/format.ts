@@ -119,7 +119,7 @@ export function renderDelivery(
   };
   if (delivery.editedAtMs !== null) meta.edited_at = iso(delivery.editedAtMs);
   if (enrichment.permalink !== null) meta.permalink = enrichment.permalink;
-  if (delivery.isReply && enrichment.parent?.shown) {
+  if (delivery.isReply && enrichment.parent?.shown === true) {
     meta.parent = flat(enrichment.parent.line);
     meta.parent_user = enrichment.parent.authorId;
   }

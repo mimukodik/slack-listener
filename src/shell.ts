@@ -93,7 +93,7 @@ export function readSaved(
     );
     if (text === null) return null;
     const parsed = yield* Effect.try({
-      try: () => JSON.parse(text) as Partial<Saved>,
+      try: () => JSON.parse(text) as SavedFile,
       catch: () => new StateFileError({ reason: `${path} is not JSON` }),
     });
     if (parsed.version !== 1)
@@ -159,6 +159,12 @@ interface Live {
 }
 
 const decoder = new TextDecoder();
+
+// The state file as read. A file written before R18's check mark has no
+// mark on its queued reaction calls; reading it treats them as the seen mark.
+type SavedFile = Partial<Omit<Saved, "reactions">> & {
+  reactions?: (Omit<Reaction, "mark"> & { mark?: Reaction["mark"] })[];
+};
 
 const reactionAttempts = 3;
 

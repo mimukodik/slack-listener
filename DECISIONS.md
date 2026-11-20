@@ -238,6 +238,15 @@ BER-2285. When R18 landed, five of the six planted reaction bugs passed the exha
 
 - **Open: CI's depth.** CI still runs depth 7. Scaled from main's 45-73 s on the 4-vCPU Blacksmith runner, it would take about 4.5 to 7 minutes, inside the job's 15-minute limit. Every planted mutant that fails here fails by depth 4, and depth 6 costs CI what depth 7 did. The owner set no time budget, so the depth stays until he decides.
 
+## 2026-11-20: strict conditions
+
+Two type-aware rules are on: `strict-boolean-expressions` and `no-unnecessary-condition`, outside the test files like the rest. The owner chose to turn them on at the first point they fit, after step 3d and before step 4, so the faults and checks step 4 adds are written under them. The program's behaviour does not change: the 2000 seeds hash the same as on main, and depth 7 gives the same 680,613 sequences and 0 violations.
+
+- **Eleven hits, fixed.** Seven nullable strings and booleans in conditions now compare explicitly; an empty Slack display name or connection URL is still treated as missing.
+- **Three were type gaps, not style.** The state file's type said every queued reaction call has a mark, but a file written before R18's check mark has none, so the fallback to the seen mark looked unnecessary; the file now has its own type. The configuration cast its `tokens` to a type without `null`, hiding the check that rejects it; it is now read as unknown and checked. The simulator host's drain flag is set in a callback the checker cannot follow, so it now lives in an object.
+- **One check dropped.** The conformance fixture skipped a message without a `ts`, which Slack always sends and the type requires.
+- **Proven:** a planted nullable string in a condition and a `??` on a non-nullable value each fail lint.
+
 ## Changes after the first green run
 
 | When            | What                                                                                                                                                                                                                                      | Direction                              | Cause                                                                                                                                                                                         |

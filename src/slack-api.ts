@@ -154,7 +154,7 @@ export class SlackApi {
       "app",
     ).pipe(
       Effect.flatMap((body) =>
-        body.url
+        body.url !== undefined && body.url !== ""
           ? Effect.succeed(body.url)
           : Effect.fail(
               new SlackApiError({
@@ -185,7 +185,7 @@ export class SlackApi {
     >("users.info", { user }).pipe(
       Effect.map((body) => {
         const profileName = body.user?.profile?.display_name;
-        if (profileName) return profileName;
+        if (profileName !== undefined && profileName !== "") return profileName;
         return body.user?.real_name ?? body.user?.name ?? user;
       }),
     );

@@ -135,7 +135,7 @@ export function anonymise(sides: Sides, event: SlackMessage): SlackMessage {
       out.channel =
         message.channel === sides.channel ? watchedChannel : "COTHER001";
     if (message.text !== undefined) out.text = "recorded text";
-    if (message.ts !== undefined) out.ts = ts(message.ts);
+    out.ts = ts(message.ts);
     if (message.thread_ts !== undefined) out.thread_ts = ts(message.thread_ts);
     if (message.latest_reply !== undefined)
       out.latest_reply = ts(message.latest_reply);

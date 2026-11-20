@@ -759,7 +759,7 @@ export class World {
     if (delivery.isReply) this.checkParent(delivery, meta);
     if (delivery.kind === "edit") this.coverage.editsDelivered += 1;
     if (delivery.isReply) this.coverage.threadRepliesDelivered += 1;
-    if (this.slack.messages.get(delivery.ts)?.broadcast)
+    if (this.slack.messages.get(delivery.ts)?.broadcast === true)
       this.coverage.broadcastsDelivered += 1;
     if (
       this.sessionMarks &&

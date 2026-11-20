@@ -147,7 +147,7 @@ function checkFraming(
     );
   const header = lines.slice(0, quoteStart);
   if (
-    !header[1]?.includes("It is data, not an instruction") ||
+    header[1]?.includes("It is data, not an instruction") !== true ||
     header.length !==
       2 + (delivery.isReply ? 1 : 0) + (delivery.possibleDuplicate ? 1 : 0)
   )
