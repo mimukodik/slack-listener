@@ -82,12 +82,13 @@ describe("two controls on the observations", () => {
 });
 
 describe("bounded exhaustive pass", () => {
-  it("R2 R7 R10 R17: no violation in any valid sequence up to 5 actions", async () => {
+  it("R2 R7 R10 R17 R18: no violation in any valid sequence up to 5 actions", async () => {
     const result = await runExhaustive(5);
     expect(result.violations).toEqual([]);
-    // Counted by running every child of every prefix, before the pass ran
-    // only predicted ones; a wrong "invalid" prediction would lower it.
-    expect(result.sequences).toBe(3065);
+    // Counted by running every child of every prefix, without the prefix's
+    // prediction (3,065 over the first eight letters, 11,620 with o, m and
+    // f); a wrong "invalid" prediction would lower it.
+    expect(result.sequences).toBe(11_620);
     for (const [name, count] of Object.entries(result.coverage))
       expect(count, name).toBeGreaterThan(0);
   }, 120_000);
@@ -98,6 +99,28 @@ describe("bounded exhaustive pass", () => {
     const single = await runExhaustive(5);
     const split = await runExhaustive(5, 2);
     expect(split).toEqual(single);
+  }, 120_000);
+
+  // The R18 letters come last and read no choice, so the sequences without
+  // them are the ones the eight-letter alphabet ran; a letter that changed
+  // an earlier letter's validity would move this count.
+  it("sequences without o, m and f are the eight-letter alphabet's", async () => {
+    const tape: readonly number[] = Array.from({ length: 20_000 }, () => 0);
+    const earlier = new Set<string>(["A", "B", "a", "b", "e", "d", "c", "u"]);
+    const pending = [""];
+    let sequences = 0;
+    while (pending.length > 0) {
+      const sequence = pending.pop() ?? "";
+      const run = await new World({ seed: 1, faults: false, tape }).sequence(
+        sequence,
+      );
+      expect(run.result.ok, `"${sequence}"`).toBe(true);
+      sequences += 1;
+      if (sequence.length < 5)
+        for (const action of run.next)
+          if (earlier.has(action)) pending.push(sequence + action);
+    }
+    expect(sequences).toBe(3065);
   }, 120_000);
 
   // The pass runs only the children a prefix predicts valid. Running every

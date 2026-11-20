@@ -205,6 +205,39 @@ Astra (gpt-6-astra, through Codex) checked the plan and this repository's record
 
 The owner set no end point and no time budget for the experiment (2026-11-20), so `performance-is-budgeted` records the cost of each change without a limit.
 
+## 2026-11-20: a larger exhaustive alphabet
+
+BER-2285. When R18 landed, five of the six planted reaction bugs passed the exhaustive pass (2026-11-19, a reaction says the message arrived), because its alphabet gave R18 nothing to act on but a delivery: no answer from our side, no `done`, no failing call. The sampled pass alone covered the removal, the mark and the retries. The alphabet grows from 8 letters to 11, and each new letter acts through the same outside world the sampled pass uses, never inside the program.
+
+- **`o`, our answer:** our own agent posts in A's thread. It is allowed while that thread has a post by the other side after our last answer there, so it never answers itself. `b` was not such an answer: it is the other side's reply in the thread our agent started.
+- **`m`, done:** the session calls `done` over its stdio, as the sampled session does, on the latest message it was handed and has not marked. It is allowed while the listener runs and such a message exists. A message handed over before a crash counts, because the session keeps it across a restart and the listener claimed it before writing it. A first version left those out; including them adds 27 sequences at depth 5 and finds nothing either way.
+- **`f`, a failing call:** the next Web API call of a kind the sampled faults can fail (history and replies reads other than a thread parent's one-message read, reaction calls, connection opens) fails once, in the same way. The call is picked when the program makes it, not when it is answered, so "the next call" is well defined. It is allowed while no failure is armed.
+- **What did not move:** the new letters come last and read no choice. The sequences over the first eight letters therefore run as before: up to 5 actions, all 3,065 hash the same on main and on this change (steps, session, coverage, next actions), and a spec pins their count. Every one of the 2000 sampled seeds' full results hashes the same as on main, because only the exhaustive driver arms `f` or calls `m`.
+- **Counts:** depth 5 goes from 3,065 to 11,620 sequences. The new count was found by running every child of every prefix without the prefix's prediction, and the spec pins it. The split at 3 actions now gives 184 roots, and the largest holds 0.85% of depth 7. The pass reports four more coverage counts, each the number of runs where it happened: a seen mark taken off, a `done` confirmed, the armed failure hitting a reaction call, and the armed failure hitting a read. All four are above zero at depth 5.
+- **Mutants, each restored from a copy.** "main" is the exhaustive pass at 54127de with the mutant; "11 letters" is this change at the smallest depth that fails, with its first violation:
+
+  | Mutant                                    | main, depth 7 (88,025) | 11 letters                                                                                |
+  | ----------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
+  | an answer takes no reaction off           | passes                 | depth 2, 1 of 34 fails: after "Ao", the seen mark stays after our side answered           |
+  | an earlier answer is ignored              | passes                 | depth 4, 4 of 1,554 fail: after "dfAo", the seen mark stays after our side answered       |
+  | the reaction queue is not saved           | passes                 | depth 4, 1 of 1,554 fails: after "Afco", the seen mark stays after our side answered      |
+  | the shell does not retry                  | passes                 | depth 2, 1 of 34 fails: after "fA", a delivered message has no seen mark                  |
+  | every queued call is sent at once         | passes                 | depth 3, 3 of 218 fail: after "Afo", the seen mark came off before the handled one was on |
+  | `done` is ignored                         | passes                 | depth 2, 1 of 34 fails: after "Am", the seen mark stays after the session marked it done  |
+  | the mark is not saved                     | passes                 | passes at depth 7 (680,613)                                                               |
+  | the reply to `done` comes before the save | passes                 | passes at depth 7 (680,613)                                                               |
+
+  The mutants: `noteAnswer` returns without `handle`; `reactTo` ignores an answer already in the thread; the snapshot saves an empty reaction queue; the shell tries a reaction call once; `pumpReactions` sends every queued call at once and empties the queue after saving it; `markDone` records the mark without `handle`; `marked_done` saves nothing; `marked_done` answers before it saves. The sixth mutant of 2026-11-19, the reaction added when the delivery starts, already failed. The last two lose a mark only when the listener crashes between the session's `done` and the next save, and that save comes in the same step whenever the mark swaps a reaction. The exhaustive crash `c` comes at a delivery or two actions later, never in that gap; the sampled world crashes within 3 ms of a confirmed mark, and the sampled pass still catches both.
+
+- **Cost:** depth 7 grows 7.7 times in sequences and about 5.7 times in time. Depth 6 now costs what depth 7 did before.
+
+  | On the Mac, 8 workers | main (54127de) | 11 letters              |
+  | --------------------- | -------------- | ----------------------- |
+  | Depth 6               | 16,401, 3.6 s  | 88,547, 14.0 s          |
+  | Depth 7               | 88,025, 16.9 s | 680,613, 95.8 s, 96.1 s |
+
+- **Open: CI's depth.** CI still runs depth 7. Scaled from main's 45-73 s on the 4-vCPU Blacksmith runner, it would take about 4.5 to 7 minutes, inside the job's 15-minute limit. Every planted mutant that fails here fails by depth 4, and depth 6 costs CI what depth 7 did. The owner set no time budget, so the depth stays until he decides.
+
 ## Changes after the first green run
 
 | When            | What                                                                                                                                                                                                                                      | Direction                              | Cause                                                                                                                                                                                         |
@@ -245,3 +278,4 @@ The owner set no end point and no time budget for the experiment (2026-11-20), s
 | 11-19, BER-2242 | R18: a handled message trades 👀 for ✔️ instead of losing its reaction                                                                                                                                                                    | rule changed                           | owner's decision: a sender must tell handled from never delivered                                                                                                                             |
 | 11-19, BER-2242 | checker: exactly one mark per delivered message at the end; 👀 comes off only while ✔️ is on; ✔️ never comes off                                                                                                                          | checker stricter                       | the new rule                                                                                                                                                                                  |
 | 11-19, BER-2216 | the end-of-run checks read the world only on the wake that ends the run; the runtime builds trace lines only when asked                                                                                                                   | structure                              | every seed's result and depth 7 identical to main                                                                                                                                             |
+| 11-20, BER-2285 | exhaustive pass: three more letters, our answer in a thread (o), the session's `done` (m) and a Web API call failing once (f)                                                                                                             | checker stricter                       | five of six planted R18 bugs passed the eight-letter alphabet                                                                                                                                 |
