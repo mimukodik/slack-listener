@@ -1,20 +1,21 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // The process boundary: arguments, the configuration, the tokens and the lock
-// file use Node directly, then the listener runs as an Effect program on the
-// Node layers. Everything after the boundary reaches the world through
-// services (src/shell.ts), so the simulator can run it on its own layers.
+// file use the node: modules directly, then the listener runs as an Effect
+// program on the Bun layers. Everything after the boundary reaches the world
+// through services (src/shell.ts), so the simulator can run it on its own
+// layers.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
-  NodeFileSystem,
-  NodeRuntime,
-  NodeStdio,
-} from "@effect/platform-node-shared";
+  BunFileSystem,
+  BunRuntime,
+  BunSocket,
+  BunStdio,
+} from "@effect/platform-bun";
 import { Cause, Clock, Data, Deferred, Effect, Exit, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
-import { Socket } from "effect/socket";
 
 import {
   defaultConfigPath,
@@ -241,15 +242,15 @@ const program = Effect.gen(function* () {
 });
 
 const layers = Layer.mergeAll(
-  NodeFileSystem.layer,
-  NodeStdio.layer,
+  BunFileSystem.layer,
+  BunStdio.layer,
   FetchHttpClient.layer,
-  Socket.layerWebSocketConstructorGlobal,
+  BunSocket.layerWebSocketConstructor,
 );
 
 // Exits 0 when the session ends or a signal stops the listener, 1 when it
 // failed, at once, as before the listener ran on Effect.
-NodeRuntime.runMain(program.pipe(Effect.provide(layers)), {
+BunRuntime.runMain(program.pipe(Effect.provide(layers)), {
   disableErrorReporting: true,
   teardown: (exit) =>
     process.exit(
