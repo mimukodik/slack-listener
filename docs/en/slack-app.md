@@ -102,7 +102,7 @@ Write the instance configuration, for example to `~/.config/slack-listener/confi
 Check it from the repository root:
 
 ```sh
-node src/main.ts --check --config <path>
+bun src/main.ts --check --config <path>
 ```
 
 `--check` checks three things: the bot token, that the bot can read the channel, and the Socket Mode token.

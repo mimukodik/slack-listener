@@ -1,5 +1,5 @@
 // Turns recorded Socket Mode frames (config "recordFile") into fixtures:
-//   node src/sim/conformance/import.ts <frames.ndjson> <config.json>
+//   bun src/sim/conformance/import.ts <frames.ndjson> <config.json>
 // It adds one fixture per kind and author not already in fixtures.json and
 // prints what it added; review the diff before committing. A surprise from real
 // Slack becomes a fixture first and a change to the fake second.

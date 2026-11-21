@@ -48,7 +48,7 @@ if (import.meta.main) {
     !Number.isInteger(actions) ||
     actions < 1
   ) {
-    process.stderr.write("usage: node src/sim/run.ts [seeds] [actions]\n");
+    process.stderr.write("usage: bun src/sim/run.ts [seeds] [actions]\n");
     process.exit(2);
   }
   const started = Date.now();

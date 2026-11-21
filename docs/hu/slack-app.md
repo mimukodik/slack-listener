@@ -102,7 +102,7 @@ A `reaction` és a `handledReaction` elhagyható, alapértékük `"eyes"` és `"
 Ellenőrizd a repó gyökeréből:
 
 ```sh
-node src/main.ts --check --config <path>
+bun src/main.ts --check --config <path>
 ```
 
 A `--check` három dolgot néz meg: a bot-tokent, hogy a bot olvassa-e a csatornát, és a Socket Mode tokent.

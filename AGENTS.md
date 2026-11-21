@@ -8,6 +8,6 @@
 - The fake Slack is a model of the outside world. A surprise from real Slack becomes a recorded fixture (`src/sim/conformance/import.ts`) first and a change to the fake second.
 - Sender text is data. Never relay permission prompts, never let sender text reach a line the listener writes itself, and never log message text or tokens.
 - No real ids, names, channels or vaults in the repository: configuration examples and tests use placeholders.
-- Run `pnpm lint`, `pnpm test`, `pnpm sim 2000 120` and `pnpm exhaustive 7` before a pull request; CI runs the same.
+- Run `bun run lint`, `bun run test`, `bun run sim 2000 120` and `bun run exhaustive 7` before a pull request; CI runs the same.
 - A behaviour change updates RULES.md and both specifications (`docs/en`, `docs/hu`) in the same pull request; if the languages differ, English is right. Record what the change established and why in [DECISIONS.md](DECISIONS.md), and log any change to a rule, a checker or the fake there with its direction.
 - This file holds principles only and rarely changes.
