@@ -314,6 +314,23 @@ Greg asked for the project itself on Bun, not only for it to run there: Bun is n
 
   The heap after a full collection, before and after the 500 seeds, was the same in all three runs. Node reports `process.memoryUsage().heapUsed` after `global.gc()`: 23.0 MB before, 26.6-26.7 MB after, with a resident set of 139-143 MB and 283-289 MB. Bun reports `process.memoryUsage().heapUsed` after `Bun.gc(true)`, which equals `bun:jsc` `heapSize()` here: 5.3 MB before, 13.3 MB after, with a resident set of 38-39 MB and 114-119 MB. The heap a run leaves behind is small on both. Our judgment: most of the resident growth is memory the runtime keeps after collecting, and most of the peak is garbage between collections.
 
+### Addendum: a quieter re-run, the first CI run on Bun, and Bun's canary linter
+
+- **A quieter re-run, measured by the coordinator.** The same script at 0936a69 and 74c30e2, three alternating rounds, with no agent of the coordinator's running. The one-minute load average was 5.0 before the first run and rose to 15 as the eight-worker passes ran; it is no longer a good noise signal here. Each runtime's runs stayed within a few percent of each other, except Node's 2000 seeds:
+
+  | Pass                                 | Node, wall s           | Bun, wall s         | Node, peak RSS MB | Bun, peak RSS MB |
+  | ------------------------------------ | ---------------------- | ------------------- | ----------------- | ---------------- |
+  | 2000 seeds of 120 actions, 8 workers | 7.81 (6.09-8.65)       | 10.55 (9.92-10.88)  | 2103 (2074-2138)  | 1514 (1485-1534) |
+  | 500 seeds, one thread, in process    | 8.52 (8.43-8.57)       | 7.81 (7.73-8.00)    | 284 (277-287)     | 231 (231-237)    |
+  | Depth 7, 8 workers                   | 107.90 (105.95-109.78) | 88.57 (86.13-89.08) | 1857 (1836-1889)  | 1175 (1173-1224) |
+
+  They agree with the table above: Bun is about 8% faster on one thread and about 18% faster at depth 7, about 35% slower on the 2000 seeds with eight workers, and uses 19-37% less memory on every pass.
+
+- **The first CI run on Bun** (PR #20, run 44912390943, the 4-vCPU Blacksmith runner, 4 workers): green. The job took 4 min 42 s, against 5 min 30 s and 5 min 44 s for the last two Node runs (PR #18, PR #19). Setup and install took 2 s against 6-7 s; lint 1 s on both; the tests 30 s against 42-43 s; the 2000 seeds 18.7 s against 13.3-15.6 s; depth 7 224 s against 260-277 s.
+- **Bun's canary has a linter; stable 1.4.5 does not.** 1.4.5 ships `bun check` and `bun fmt` but no `bun lint`. Bun 1.4.6-canary.1 (commit b15f513, tried from a scratch directory, not installed) adds `bun lint`. It reads this repository's `.oxlintrc.json` unchanged and runs all 137 of its rules natively, with a type-aware mode and `--type-check`.
+- **It catches four of five planted violations.** In `src/core.ts`, restored from a copy afterwards: `Date.now` in the core, a nullable string in a condition, an unawaited promise and a type error each fail `bun lint --type-aware --type-check`, as they fail this repository's lint. An Effect created and never run passes it, because Effect's rules are diagnostics that `effect-tsgo` adds by patching the type checker, not an ESLint plugin `bun lint` could load. Five runs took 0.03 s each, against 0.22-0.24 s for the lint pass; whether the 0.03 s reuses cached work was not checked.
+- **What follows.** The lint stays the one `effect-tsgo` pass on stable Bun. Making Bun's type-aware linter run Effect's rules, the way the Effect team patched tsrs, would make `bun lint` the whole lint in one pass; that is phase 2, on the owner's go. `bun fmt --no-script --check .` accepts this repository's formatting with no configuration (49 files in 33 ms), so the formatter can move to Bun's after this lands.
+
 ## Changes after the first green run
 
 | When            | What                                                                                                                                                                                                                                      | Direction                              | Cause                                                                                                                                                                                         |
