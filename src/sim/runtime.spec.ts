@@ -1,7 +1,8 @@
-import { Clock, Duration, Effect, Fiber, Random, Schedule } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
-import { host, hostRuntime, withTripwire } from "./host.ts";
+import { Clock, Duration, Effect, Fiber, Random, Schedule } from "effect";
+
+import { host, withTripwire } from "./host.ts";
 import { type Limits, type Outcome, SimRuntime } from "./runtime.ts";
 
 const limits: Limits = { stepsMax: 50_000, timeMsMax: 3_600_000 };
@@ -228,13 +229,9 @@ describe("simulation runtime: one seed, one run", () => {
     ]).toEqual(saved);
   });
 
-  // BER-2338: the drain is picked by runtime name, V8's checkpoint on Node
-  // and bun:jsc's drainMicrotasks on Bun; whichever runs the specs, it must
-  // run a chain of promise callbacks before it returns.
-  it("the host names its runtime and drains promise callbacks synchronously", async () => {
-    expect(hostRuntime).toBe(
-      process.versions["bun"] === undefined ? "node" : "bun",
-    );
+  // BER-2338: the drain, bun:jsc's drainMicrotasks, must run a chain of
+  // promise callbacks and an await before it returns.
+  it("the host drains promise callbacks synchronously", async () => {
     const seen = await host.enter(() => {
       const order: string[] = [];
       void Promise.resolve()

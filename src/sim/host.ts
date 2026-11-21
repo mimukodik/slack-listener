@@ -3,78 +3,32 @@
 //
 // host gives the runtime a fresh macrotask to run its loop in, and a
 // synchronous drain of pending promise callbacks between simulated steps.
-// On Node the drain is V8's microtask checkpoint, reached through a
-// natives-syntax function compiled once here; it replaces a real setImmediate
-// per step, which made the waiting, not the program, most of a run's cost
-// (BER-2207). On Bun it is drainMicrotasks from bun:jsc, which runs
-// JavaScriptCore's microtask queue and Bun's process.nextTick queue
-// (BER-2338). The runtime is chosen by name, from process.versions, never by
-// trying one and falling back. A V8 checkpoint inside a microtask does
-// nothing, so every loop starts with a self-test and fails by name if the
-// drain does not drain; Bun's drain also drains inside a microtask, so there
-// the self-test proves only that the drain runs callbacks.
+// The drain is drainMicrotasks from bun:jsc, which runs JavaScriptCore's
+// microtask queue and Bun's process.nextTick queue (BER-2338); it replaces a
+// real setImmediate per step, which made the waiting, not the program, most
+// of a run's cost (BER-2207). Every loop starts with a self-test and fails by
+// name if the drain does not drain. Bun's drain also drains inside a
+// microtask, so the self-test proves that the drain runs callbacks, not that
+// the loop sits in a macrotask; the loop enters one anyway.
 // withTripwire makes any real timer during a simulated run throw, and the
-// loop itself refuses process.nextTick, which V8's drain would not run and
-// Bun's would run in its own order, so code that slips past Effect's
-// services cannot go unnoticed (PRINCIPLES.md: world-through-services,
-// one-seed-one-run). The refusal replaces only the global: code that kept
-// its own reference to process.nextTick at load would get past it. Identical
-// seed traces show nothing does today.
-import { setFlagsFromString } from "node:v8";
-import { runInThisContext } from "node:vm";
+// loop itself refuses process.nextTick, which the drain would run in its own
+// order, so code that slips past Effect's services cannot go unnoticed
+// (PRINCIPLES.md: world-through-services, one-seed-one-run). The refusal
+// replaces only the global: code that kept its own reference to
+// process.nextTick at load would get past it. Identical seed traces show
+// nothing does today.
+import { drainMicrotasks } from "bun:jsc";
 
 import type { SimHost } from "./runtime.ts";
 
 const realSetImmediate = globalThis.setImmediate;
-
-export type HostRuntime = "node" | "bun";
-
-// Bun sets process.versions.bun; Node does not.
-export const hostRuntime: HostRuntime =
-  process.versions["bun"] === undefined ? "node" : "bun";
-
-// The flag stays on for the process: V8 may flush the function's bytecode and
-// parse it again, which fails without it. Only the simulator loads this file.
-function v8Checkpoint(): () => void {
-  setFlagsFromString("--allow-natives-syntax");
-  const compiled: unknown = runInThisContext(
-    "(function () { %PerformMicrotaskCheckpoint(); })",
-  );
-  if (typeof compiled !== "function")
-    throw new Error("simulation host: the V8 checkpoint did not compile");
-  return () => {
-    Reflect.apply(compiled, undefined, []);
-  };
-}
-
-// bun:jsc has no types in this repository (Bun's types are not a dependency),
-// so its export is checked at run time. The specifier is a variable so Node's
-// type checker does not look for the module.
-async function bunDrain(): Promise<() => void> {
-  const specifier = "bun:jsc";
-  const jsc: unknown = await import(specifier);
-  if (
-    typeof jsc !== "object" ||
-    jsc === null ||
-    !("drainMicrotasks" in jsc) ||
-    typeof jsc.drainMicrotasks !== "function"
-  )
-    throw new Error("simulation host: bun:jsc has no drainMicrotasks");
-  const drainMicrotasks = jsc.drainMicrotasks;
-  return () => {
-    Reflect.apply(drainMicrotasks, undefined, []);
-  };
-}
-
-const checkpoint: () => void =
-  hostRuntime === "bun" ? await bunDrain() : v8Checkpoint();
 
 function drainSelfTest(): void {
   const drain = { done: false };
   void Promise.resolve().then(() => {
     drain.done = true;
   });
-  checkpoint();
+  drainMicrotasks();
   if (!drain.done)
     throw new Error(
       "simulation host: the microtask drain did not drain; the loop must start in a macrotask",
@@ -112,7 +66,7 @@ export const host: SimHost = {
         }
       });
     }),
-  drain: checkpoint,
+  drain: drainMicrotasks,
 };
 
 export type Tripped = { readonly name: string; readonly stack: string };

@@ -11,7 +11,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "lib": ["ES2024", "DOM"],
-    "types": ["node"],
+    "types": ["bun"],
     "incremental": true,
     "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/slack-listener.tsbuildinfo",
     "noEmit": true,

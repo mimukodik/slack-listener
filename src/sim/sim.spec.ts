@@ -1,5 +1,6 @@
+import { describe, expect, it } from "bun:test";
+
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
 
 import { runExhaustive } from "./exhaustive.ts";
 import { runSeeds } from "./run.ts";

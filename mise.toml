@@ -1,5 +1,2 @@
-[settings]
-idiomatic_version_file_enable_tools = ["node"]
-
 [tools]
-pnpm = "12.17.0"
+bun = "1.4.5"

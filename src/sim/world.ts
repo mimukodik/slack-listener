@@ -436,97 +436,109 @@ export class World {
     });
   }
 
-  private readonly fetch: typeof globalThis.fetch = async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const method = url.pathname.split("/").at(-1) ?? "";
-    this.touch();
-    if (method === "apps.connections.open" && this.reconnectByMs !== null) {
-      if (this.now > this.reconnectByMs + 50)
-        throw new SafetyViolation(`R8: reconnect started after the 60s cap`);
-      this.reconnectByMs = null;
-    }
-    const body = init?.body;
-    const params = new URLSearchParams(
-      body instanceof Uint8Array
-        ? decoder.decode(body)
-        : typeof body === "string"
-          ? body
-          : body instanceof URLSearchParams
-            ? body.toString()
-            : "",
-    );
-    if (
-      method.startsWith("reactions.") &&
-      new Headers(init?.headers).get("authorization") !==
-        "Bearer xoxb-simulation-secret"
-    )
-      throw new SafetyViolation(`R18: ${method} not made as the own bot`);
-    const epoch = this.runtime.epoch;
-    const generation = this.socketCounter;
-    this.options.trace?.push(`${this.now} api ${method} ${params.toString()}`);
-    // Taken when the call is made, so "the next call" is the next one the
-    // program starts. False in sampled runs, so the choices below are read
-    // exactly as before.
-    const failOnce = this.takeFailure(method, params);
-    return new Promise<Response>((resolve, reject) => {
-      this.answer(
-        () => {
-          if (epoch !== this.runtime.epoch)
-            throw new Error("fetch answer crossed a crash");
-          if (
-            (failOnce && !method.startsWith("reactions.")) ||
-            (this.apiFailing &&
-              params.get("limit") !== "1" &&
-              method.startsWith("conversations.") &&
-              this.choices.chance(50)) ||
-            (method === "apps.connections.open" &&
-              (this.outage || (this.faultsOn && this.choices.chance(10))))
-          ) {
-            this.coverage.apiFailures += 1;
-            reject(new Error("simulated network failure"));
-            return;
-          }
-          if (
-            method.startsWith("reactions.") &&
-            (failOnce || (this.apiFailing && this.choices.chance(50)))
-          ) {
-            this.coverage.reactionFaults += 1;
-            const ts = params.get("timestamp") ?? "";
-            const call = `${method} ${ts}`;
-            const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
-            this.slack.reactionFailures.set(call, failures);
-            if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
-            reject(new Error("simulated network failure"));
-            return;
-          }
-          if (method.startsWith("reactions."))
-            this.slack.reactionFailures.delete(
-              `${method} ${params.get("timestamp") ?? ""}`,
-            );
-          if (
-            (method === "conversations.history" ||
-              method === "conversations.replies") &&
-            generation !== this.socketCounter
-          )
-            this.coverage.staleCatchUpReplies += 1;
-          resolve(
-            new Response(JSON.stringify(this.response(method, params)), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            }),
-          );
-        },
-        // Reaction calls are as slow as reads, so a removal could overtake
-        // its addition if the listener sent both at once.
-        this.latency(
-          10,
-          method.startsWith("conversations.") || method.startsWith("reactions.")
-            ? 5000
-            : 100,
-        ),
+  // Bun's fetch type carries preconnect; the fake world refuses it, since a
+  // simulated run must not open a real connection.
+  private readonly fetch: typeof globalThis.fetch = Object.assign(
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = url.pathname.split("/").at(-1) ?? "";
+      this.touch();
+      if (method === "apps.connections.open" && this.reconnectByMs !== null) {
+        if (this.now > this.reconnectByMs + 50)
+          throw new SafetyViolation(`R8: reconnect started after the 60s cap`);
+        this.reconnectByMs = null;
+      }
+      const body = init?.body;
+      const params = new URLSearchParams(
+        body instanceof Uint8Array
+          ? decoder.decode(body)
+          : typeof body === "string"
+            ? body
+            : body instanceof URLSearchParams
+              ? body.toString()
+              : "",
       );
-    });
-  };
+      if (
+        method.startsWith("reactions.") &&
+        new Headers(init?.headers).get("authorization") !==
+          "Bearer xoxb-simulation-secret"
+      )
+        throw new SafetyViolation(`R18: ${method} not made as the own bot`);
+      const epoch = this.runtime.epoch;
+      const generation = this.socketCounter;
+      this.options.trace?.push(
+        `${this.now} api ${method} ${params.toString()}`,
+      );
+      // Taken when the call is made, so "the next call" is the next one the
+      // program starts. False in sampled runs, so the choices below are read
+      // exactly as before.
+      const failOnce = this.takeFailure(method, params);
+      return new Promise<Response>((resolve, reject) => {
+        this.answer(
+          () => {
+            if (epoch !== this.runtime.epoch)
+              throw new Error("fetch answer crossed a crash");
+            if (
+              (failOnce && !method.startsWith("reactions.")) ||
+              (this.apiFailing &&
+                params.get("limit") !== "1" &&
+                method.startsWith("conversations.") &&
+                this.choices.chance(50)) ||
+              (method === "apps.connections.open" &&
+                (this.outage || (this.faultsOn && this.choices.chance(10))))
+            ) {
+              this.coverage.apiFailures += 1;
+              reject(new Error("simulated network failure"));
+              return;
+            }
+            if (
+              method.startsWith("reactions.") &&
+              (failOnce || (this.apiFailing && this.choices.chance(50)))
+            ) {
+              this.coverage.reactionFaults += 1;
+              const ts = params.get("timestamp") ?? "";
+              const call = `${method} ${ts}`;
+              const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
+              this.slack.reactionFailures.set(call, failures);
+              if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
+              reject(new Error("simulated network failure"));
+              return;
+            }
+            if (method.startsWith("reactions."))
+              this.slack.reactionFailures.delete(
+                `${method} ${params.get("timestamp") ?? ""}`,
+              );
+            if (
+              (method === "conversations.history" ||
+                method === "conversations.replies") &&
+              generation !== this.socketCounter
+            )
+              this.coverage.staleCatchUpReplies += 1;
+            resolve(
+              new Response(JSON.stringify(this.response(method, params)), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          },
+          // Reaction calls are as slow as reads, so a removal could overtake
+          // its addition if the listener sent both at once.
+          this.latency(
+            10,
+            method.startsWith("conversations.") ||
+              method.startsWith("reactions.")
+              ? 5000
+              : 100,
+          ),
+        );
+      });
+    },
+    {
+      preconnect: (): void => {
+        throw new Error("real fetch.preconnect during a simulated run");
+      },
+    },
+  );
 
   // The exhaustive pass's f, taken by the first failable call after it.
   private takeFailure(method: string, params: URLSearchParams): boolean {
