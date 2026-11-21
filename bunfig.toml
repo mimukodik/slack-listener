@@ -1,4 +1,4 @@
-# Package bins with a node shebang (oxfmt, oxlint, effect-tsgo) run on Bun
-# too, so the repository needs no Node.
+# Package bins with a node shebang (oxlint, effect-tsgo) run on Bun too, so
+# the repository needs no Node.
 [run]
 bun = true
