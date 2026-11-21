@@ -1,5 +1,6 @@
+import { describe, expect, it } from "bun:test";
+
 import { Clock, Duration, Effect, Fiber, Random, Schedule } from "effect";
-import { describe, expect, it } from "vitest";
 
 import { host, withTripwire } from "./host.ts";
 import { type Limits, type Outcome, SimRuntime } from "./runtime.ts";
@@ -226,6 +227,25 @@ describe("simulation runtime: one seed, one run", () => {
       globalThis.setInterval,
       globalThis.setImmediate,
     ]).toEqual(saved);
+  });
+
+  // BER-2338: the drain, bun:jsc's drainMicrotasks, must run a chain of
+  // promise callbacks and an await before it returns.
+  it("the host drains promise callbacks synchronously", async () => {
+    const seen = await host.enter(() => {
+      const order: string[] = [];
+      void Promise.resolve()
+        .then(() => order.push("first"))
+        .then(() => order.push("second"));
+      void (async () => {
+        await null;
+        order.push("awaited");
+      })();
+      expect(order).toEqual([]);
+      host.drain();
+      return order;
+    });
+    expect(seen).toEqual(["first", "awaited", "second"]);
   });
 
   it("a real process.nextTick inside the program stops it", async () => {

@@ -121,6 +121,10 @@
           {
             "name": "crypto",
             "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          },
+          {
+            "name": "Bun",
+            "message": "world-through-services: the program reaches the world through Effect services; Bun's own APIs (Bun.sleep, Bun.nanoseconds, Bun.file, Bun.spawn) bypass them."
           }
         ],
         "no-restricted-properties": [
@@ -166,7 +170,7 @@
           {
             "patterns": [
               {
-                "group": ["node:*", "fs/*", "timers/*"],
+                "group": ["node:*", "fs/*", "timers/*", "bun:*"],
                 "message": "decisions-are-pure: these modules do no I/O; the program around them does."
               }
             ],
@@ -209,6 +213,10 @@
               },
               {
                 "name": "timers",
+                "message": "decisions-are-pure: these modules do no I/O; the program around them does."
+              },
+              {
+                "name": "bun",
                 "message": "decisions-are-pure: these modules do no I/O; the program around them does."
               }
             ]
@@ -270,6 +278,10 @@
           {
             "name": "crypto",
             "message": "world-through-services: randomness comes from the Random service or the simulator's choices."
+          },
+          {
+            "name": "Bun",
+            "message": "world-through-services: the program reaches the world through Effect services; Bun's own APIs (Bun.sleep, Bun.nanoseconds, Bun.file, Bun.spawn) bypass them."
           }
         ],
         "no-restricted-properties": [
@@ -315,50 +327,54 @@
           {
             "patterns": [
               {
-                "group": ["node:*", "fs/*", "timers/*"],
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "group": ["node:*", "fs/*", "timers/*", "bun:*"],
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               }
             ],
             "paths": [
               {
                 "name": "fs",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "net",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "child_process",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "os",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "http",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "https",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "dgram",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "dns",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "worker_threads",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               },
               {
                 "name": "timers",
-                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Node layers."
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
+              },
+              {
+                "name": "bun",
+                "message": "world-through-services: the program reaches the world through Effect services; main.ts provides the Bun layers."
               }
             ]
           }

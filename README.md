@@ -14,14 +14,14 @@ A Claude Code channel server that wakes a session when someone posts in a Slack 
 
 ## Run it
 
-Node 26 or later, pnpm, and the [1Password CLI](https://developer.1password.com/docs/cli/) for the tokens.
+Bun 1.4.5 or later and the [1Password CLI](https://developer.1password.com/docs/cli/) for the tokens.
 
 1. Create a Slack app and a config file: [docs/en/slack-app.md](docs/en/slack-app.md). Keep the config outside any repository; tokens are `op://` references, never values.
 2. Install and check the setup:
 
    ```sh
-   pnpm install
-   node src/main.ts --check --config <config.json>
+   bun install
+   bun src/main.ts --check --config <config.json>
    ```
 
 3. Write an `mcp.json` outside any project, so that no other session starts a second listener:
@@ -30,7 +30,7 @@ Node 26 or later, pnpm, and the [1Password CLI](https://developer.1password.com/
    {
      "mcpServers": {
        "slack-listener": {
-         "command": "node",
+         "command": "bun",
          "args": ["<checkout>/src/main.ts", "--config", "<config.json>"]
        }
      }
@@ -53,10 +53,10 @@ The channel id and the configured user and bot ids. Slack's `app_id` marking on 
 ## Develop
 
 ```sh
-pnpm lint            # format, oxlint, typecheck
-pnpm test            # unit tests, conformance, a bounded exhaustive pass
-pnpm sim 2000 120    # the seeded simulator: seeds x actions
-pnpm exhaustive 7    # every action sequence up to 7
+bun run lint            # format, oxlint, typecheck
+bun run test            # unit tests, conformance, a bounded exhaustive pass
+bun run sim 2000 120    # the seeded simulator: seeds x actions
+bun run exhaustive 7    # every action sequence up to 7
 ```
 
 A change to behaviour updates [RULES.md](RULES.md) and both specifications in the same pull request, and records why in [DECISIONS.md](DECISIONS.md). The docs exist in English and Hungarian; if they differ, the English one is right. [PRINCIPLES.md](PRINCIPLES.md) says how the code is built: Tiger Style and deterministic simulation testing, with how each principle is enforced. [AGENTS.md](AGENTS.md) holds the working rules.

@@ -13,29 +13,28 @@
   },
   "type": "module",
   "scripts": {
-    "start": "node src/main.ts",
-    "fmt": "oxfmt --write .",
-    "fmt:check": "oxfmt --check .",
-    "lint": "pnpm fmt:check && effect-tsgo --tsrs-lint oxlint --type-aware --type-check --tsconfig tsconfig.json --format=unix --deny-warnings src",
-    "test": "vitest --run",
-    "sim": "node src/sim/run.ts",
-    "exhaustive": "node src/sim/exhaustive.ts"
+    "start": "bun src/main.ts",
+    "fmt": "bun fmt --no-script",
+    "fmt:check": "bun fmt --no-script --check",
+    "lint": "bun run fmt:check && effect-tsgo --tsrs-lint oxlint --type-aware --type-check --tsconfig tsconfig.json --format=unix --deny-warnings src",
+    "test": "bun test",
+    "sim": "bun src/sim/run.ts",
+    "exhaustive": "bun src/sim/exhaustive.ts"
   },
   "dependencies": {
-    "@effect/platform-node-shared": "4.1.4",
+    "@effect/platform-bun": "4.1.4",
     "effect": "4.1.4"
   },
   "devDependencies": {
     "@effect/tsgo": "0.70.0",
+    "@types/bun": "1.4.5",
     "@types/node": "^26.6.6",
     "fast-check": "4.10.2",
-    "oxfmt": "0.56.0",
     "oxlint": "1.94.0",
-    "tsrs": "0.25.0-ts7.1.0-beta",
-    "vitest": "^4.1.12"
+    "tsrs": "0.25.0-ts7.1.0-beta"
   },
   "engines": {
-    "node": ">=26.13.0"
+    "bun": ">=1.4.5"
   },
-  "packageManager": "pnpm@12.17.0"
+  "packageManager": "bun@1.4.5"
 }

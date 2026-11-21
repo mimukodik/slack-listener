@@ -1,3 +1,5 @@
+import { describe, expect, it } from "bun:test";
+
 import {
   Cause,
   Deferred,
@@ -12,7 +14,6 @@ import {
 } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Socket } from "effect/socket";
-import { describe, expect, it } from "vitest";
 
 import { ConfigError, parseConfig, type ListenerConfig } from "./config.ts";
 import { defaultLimits, type TimerName } from "./core.ts";
