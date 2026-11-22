@@ -24,7 +24,6 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Context, Effect, Exit, Layer, Scope } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 
-import { withFixedBudget } from "../../action/agreement.ts";
 import {
   type Call,
   makeWorld,
@@ -848,7 +847,7 @@ export async function runHubSimulation(options: {
           }
         }),
       );
-    }).pipe(Effect.provide(hubPlatformLayer), withFixedBudget);
+    }).pipe(Effect.provide(hubPlatformLayer));
 
   try {
     const { value, tripped } = await withTripwire(async () => {

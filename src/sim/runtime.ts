@@ -277,7 +277,17 @@ export class SimRuntime {
   // nothing. The host is the only thing taken from the real process.
   async run(limits: Limits, host: SimHost): Promise<Outcome<unknown, unknown>> {
     assert(limits.stepsMax > 0 && limits.timeMsMax > 0, "limits not positive");
-    return host.enter(() => this.loop(limits, host));
+    return host.enter(() => {
+      try {
+        return this.loop(limits, host);
+      } finally {
+        // No turn runs between runs, so the world's own code after a run (a
+        // scope it closes, whose finalizers interrupt the process's fibers)
+        // gets Effect's budget. With the last turn's, an interrupt could yield
+        // into this runtime's queue, which nothing drains once the loop ends.
+        this.opsThisTurnMax = opsPerTurnMax;
+      }
+    });
   }
 
   private loop(limits: Limits, host: SimHost): Outcome<unknown, unknown> {
