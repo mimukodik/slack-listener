@@ -267,27 +267,103 @@ describe("R7 and R8: reconnect and catch up", () => {
     expect(d.deliveries.map((x) => x.ts)).toEqual([ts(40), ts(50)]);
   });
 
-  it("the wait between failed connection attempts grows to at most 60 seconds", () => {
+  // The delays themselves are the shell's backoff schedule, tested on a
+  // virtual clock in shell.spec.ts; the core only says which run of tries a
+  // wait belongs to and when a run is over.
+  it("a failed connection or catch-up waits on the connection's backoff, and going live starts it over", () => {
     const d = driver();
-    const waits: number[] = [];
-    for (let i = 0; i < 10; i += 1) {
+    const backOffs = (effects: CoreEffect[]) =>
+      effects.flatMap((e) =>
+        e.type === "back_off" ? [`${e.backoff} ${e.timer}`] : [],
+      );
+    const resets = (effects: CoreEffect[]) =>
+      effects.flatMap((e) => (e.type === "reset_backoff" ? [e.backoff] : []));
+    for (let i = 0; i < 3; i += 1) {
       const effects = d.send({
         type: "connect_failed",
         generation: d.state.generation,
         reason: "test",
       });
-      const timer = effects.find(
-        (e) => e.type === "set_timer" && e.name === "reconnect",
-      );
-      if (timer?.type === "set_timer") waits.push(timer.atMs - d.now);
-      d.send(
-        { type: "timer", name: "reconnect" },
-        timer?.type === "set_timer" ? timer.atMs : d.now,
-      );
+      expect(backOffs(effects)).toEqual(["connection reconnect"]);
+      expect(d.state.connection).toBe("waiting");
+      d.send({ type: "timer", name: "reconnect" }, d.now + 1000);
     }
-    expect(waits).toEqual([
-      1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000, 60000,
-    ]);
+    const generation = d.state.generation;
+    d.send({ type: "connected", generation });
+    d.send({ type: "hello", generation });
+    const failed = d.send({
+      type: "fetch_failed",
+      catchUpId: d.state.catchUpSeq,
+      reason: "429",
+    });
+    expect(backOffs(failed)).toEqual(["connection catch_up"]);
+    expect(resets(failed)).toEqual([]);
+    d.send({ type: "timer", name: "catch_up" }, d.now + 1000);
+    const live = d.send({
+      type: "history_loaded",
+      catchUpId: d.state.catchUpSeq,
+      messages: [],
+    });
+    expect(d.state.live).toBe(true);
+    expect(resets(live)).toEqual(["connection"]);
+    const closed = d.send({
+      type: "closed",
+      generation: d.state.generation,
+      reason: "socket reset",
+    });
+    expect(backOffs(closed)).toEqual(["connection reconnect"]);
+    // The core computes no delay of its own for a retry.
+    expect(
+      d.effects.filter(
+        (e) =>
+          e.type === "set_timer" &&
+          (e.name === "reconnect" ||
+            e.name === "catch_up" ||
+            e.name === "sink"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("a failed delivery waits on the delivery's backoff, and a written one starts it over", () => {
+    const d = driver();
+    d.connect();
+    const message = post(10, people.other);
+    d.send(
+      {
+        type: "envelope",
+        generation: d.state.generation,
+        envelopeId: "env-1",
+        message,
+      },
+      d.now + 10_000,
+    );
+    const effects: CoreEffect[] = [];
+    // A delivery the driver does not answer: deliver_failed, then delivered.
+    const released = step(
+      d.state,
+      { type: "timer", name: "release" },
+      d.now + 10_000,
+    );
+    d.state = released.state;
+    const delivery = released.effects.find((e) => e.type === "deliver");
+    expect(delivery?.type).toBe("deliver");
+    if (delivery?.type !== "deliver") return;
+    for (const event of [
+      { type: "deliver_failed", key: delivery.delivery.key, reason: "test" },
+      { type: "timer", name: "sink" },
+      { type: "delivered", key: delivery.delivery.key },
+    ] satisfies CoreEvent[]) {
+      const result = step(d.state, event, d.now);
+      d.state = result.state;
+      effects.push(...result.effects);
+    }
+    expect(
+      effects.flatMap((e) =>
+        e.type === "back_off" || e.type === "reset_backoff"
+          ? [`${e.type} ${e.backoff}`]
+          : [],
+      ),
+    ).toEqual(["back_off delivery", "reset_backoff delivery"]);
   });
 });
 
