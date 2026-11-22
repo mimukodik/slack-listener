@@ -117,7 +117,28 @@ What the method gave and what it cost, and every change to the rules, the checke
 | Shell: Socket Mode, MCP stdio, 1Password, lock file | done             | `--check` verifies the bot token, reading the channel and the Socket Mode token.                                                 |
 | Live use                                            | since 2026-11-17 | A top-level post, a thread reply and an edit each arrived once, 3 to 4 s after posting; the own side's agent posts were dropped. |
 | Step 2: the `reply` tool                            | planned          | Switched off; see `RULES.md` step 2.                                                                                             |
+| Task hub, B1: store and actions                     | done             | See section 10.                                                                                                                  |
 
 ## 9. Decisions
 
 The decisions behind these rules, with their reasons and dates, are in [`DECISIONS.md`](../../DECISIONS.md).
+
+## 10. The task hub
+
+The task hub is a second part of this repository (`src/hub`), added on 2026-11-22 (BER-2368). It records the tasks people and agents share: who created each one, who works on it, what it waits on and from whom, and since when, so a question or a red CI is not missed. Step B1, built, is the store and its actions; step B2 adds sessions as separate programs and step B3 a web page. Its rules are T1 to T7 in [`RULES.md`](../../RULES.md); the listener's R rules do not apply to it.
+
+- **States:** A2A's six: `submitted`, `working`, `input-required`, `completed`, `failed` and `canceled`. The last three are final. A submitted task, or a working one whose lease has lapsed, is ready to be claimed. A claim takes the ready task claimed least recently, a never-claimed one first, so a task that keeps lapsing does not hold the others back.
+- **Actions:** `taskCreate`, `taskClaim`, `taskRenew`, `taskRequestInput`, `taskAnswer`, `taskAmend`, `taskCancel`, `taskComplete`, `taskFail`, `taskGet`, `taskEvents` and `taskWaiting`, each with its own permission (`task.create` and so on), on the same action contract as the receipt example, so REST, MCP, RPC and the atoms serve them alike. Every change takes a request key chosen by the caller; repeating it returns the first answer. `taskWaiting` is a principal's inbox: the tasks waiting on its answer, longest first, each with how long it has waited.
+- **Store:** SQLite through effect/sql. Each change is one write transaction that appends exactly one event and updates the task; the tasks are a projection of the events.
+
+| Rule | About                                                                              |
+| ---- | ---------------------------------------------------------------------------------- |
+| T1   | a task is in one state and moves only by the transition table                      |
+| T2   | at most one principal holds a live lease; only it renews, asks, completes or fails |
+| T3   | a final state is reached at most once and never left                               |
+| T4   | every change is exactly one event with its actor, read back in commit order        |
+| T5   | only the principal a task waits on answers, with an offered option                 |
+| T6   | a repeated request key returns the first answer and changes nothing                |
+| T7   | a crash leaves the store as of the last commit                                     |
+
+The hub's simulator (`bun run sim:hub`) runs seeded sequences of calls from several principals through every surface on simulated time, so leases lapse, crashes the process at random points, inside write transactions too, by copying the database files as they are on disk, and checks T1 to T7 after every step against a reference model of its own. Each rule is shown to catch a deliberately broken build; the plants are listed in [`DECISIONS.md`](../../DECISIONS.md).

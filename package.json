@@ -19,10 +19,13 @@
     "lint": "bun run fmt:check && effect-tsgo --tsrs-lint oxlint --type-aware --type-check --tsconfig tsconfig.json --format=unix --deny-warnings src",
     "test": "bun test",
     "sim": "bun src/sim/run.ts",
-    "exhaustive": "bun src/sim/exhaustive.ts"
+    "exhaustive": "bun src/sim/exhaustive.ts",
+    "sim:hub": "bun src/hub/sim/run.ts",
+    "sim:hub:replay": "bun src/hub/sim/replay.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.1.4",
+    "@effect/sql-sqlite-bun": "4.1.4",
     "effect": "4.1.4"
   },
   "devDependencies": {

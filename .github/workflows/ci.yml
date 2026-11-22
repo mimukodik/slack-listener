@@ -28,3 +28,7 @@ jobs:
         run: bun run sim 2000 120
       - name: Exhaustive pass, every sequence up to 7 actions
         run: bun run exhaustive 7
+      - name: Task hub simulator, 500 seeds
+        run: bun run sim:hub 500 80
+      - name: Task hub replay of the TLA+ model's paths
+        run: bun run sim:hub:replay

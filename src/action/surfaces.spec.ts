@@ -1,0 +1,338 @@
+import { describe, expect, it } from "bun:test";
+
+import { Cause, Context, Effect, Layer, Logger, Schema } from "effect";
+import fc from "fast-check";
+
+import {
+  defineAction,
+  type Policy,
+  provideAction,
+  SurfaceServices,
+} from "./action.ts";
+import {
+  disagreement,
+  runAgreement,
+  runSimulated,
+  runSequence,
+} from "./agreement.ts";
+import {
+  type Call,
+  platformLayer,
+  bearers,
+  makeWorld,
+  principalsLayer,
+  testGrants,
+  surfaces,
+} from "./harness.ts";
+import { mcpPath } from "./mcp.ts";
+import { inMemoryPolicy } from "./policy.ts";
+import {
+  getReceipt,
+  makeStore,
+  permissions,
+  ReceiptStore,
+} from "./receipts.ts";
+
+// Inputs: known events, an unknown one, malformed ids, wrong types, a missing
+// field and an extra one.
+const input = fc.oneof(
+  fc.constantFrom("E1", "E2", "E3").map((eventId) => ({ eventId })),
+  fc.constant({ eventId: "E9" }),
+  fc.constantFrom("", "bad", "e1", "E1234567", "E1 ").map((eventId) => ({
+    eventId,
+  })),
+  fc.constantFrom(7, null, true).map((eventId) => ({ eventId })),
+  fc.constant({}),
+  fc.constant({ eventId: "E2", extra: "x" }),
+);
+
+const call: fc.Arbitrary<Call> = fc.record({
+  action: fc.constantFrom("getReceipt", "acknowledge"),
+  input,
+  bearer: fc.constantFrom(...bearers),
+  surface: fc.constantFrom(...surfaces),
+});
+
+const calls = fc.array(call, { minLength: 1, maxLength: 16 });
+
+describe("the action contract", () => {
+  it("every surface gives the same answers and leaves the same store", async () => {
+    await fc.assert(
+      fc.asyncProperty(calls, async (sequence) => {
+        const agreement = await Effect.runPromise(
+          runAgreement(sequence).pipe(Effect.provide(platformLayer)),
+        );
+        const difference = disagreement(sequence, agreement);
+        if (difference !== undefined) throw new Error(difference);
+      }),
+      { numRuns: 150 },
+    );
+  }, 120_000);
+
+  it("the surfaces agree under the simulator's seeded scheduler, with no real timer", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer(), calls, async (seed, sequence) => {
+        const run = await runSimulated(seed, sequence);
+        expect(run.tripped).toEqual([]);
+        expect(run.outcome).toBe("done");
+        if (run.agreement === undefined) throw new Error("no agreement");
+        const difference = disagreement(sequence, run.agreement);
+        if (difference !== undefined)
+          throw new Error(`seed ${seed}: ${difference}`);
+      }),
+      { numRuns: 150 },
+    );
+  }, 120_000);
+
+  it("a seed replays its run: the same trace, the same answers", async () => {
+    const sequence = fc.sample(calls, { seed: 11, numRuns: 1 })[0] ?? [];
+    for (const seed of [1, 2, 3]) {
+      const first = await runSimulated(seed, sequence);
+      const second = await runSimulated(seed, sequence);
+      expect(first.outcome).toBe("done");
+      expect(second.trace).toEqual(first.trace);
+      expect(second.agreement).toEqual(first.agreement);
+    }
+    const one = await runSimulated(1, sequence);
+    const two = await runSimulated(2, sequence);
+    expect(two.trace).not.toEqual(one.trace);
+    // The seed reaches the REST answers through the simulated clock.
+    expect(one.trace.some((line) => line.includes(" timer "))).toBe(true);
+  });
+
+  it("a repeat acknowledge returns the original receipt on every surface", async () => {
+    const twice: Call[] = surfaces.flatMap((surface) => [
+      {
+        action: "acknowledge",
+        input: { eventId: "E1" },
+        bearer: "t-alice",
+        surface,
+      },
+    ]);
+    const run = await Effect.runPromise(
+      runSequence(twice, "chosen").pipe(Effect.provide(platformLayer)),
+    );
+    const values = run.observations.map((observation) =>
+      observation.kind === "success" ? observation.value : observation,
+    );
+    expect(new Set(values.map((value) => JSON.stringify(value))).size).toBe(1);
+    expect(run.snapshot.receipts).toHaveLength(1);
+  });
+});
+
+describe("the policy", () => {
+  it("decides by its Layer alone: another grant table, the same actions", async () => {
+    const acknowledgeAsEve: Call[] = surfaces.map((surface) => ({
+      action: "acknowledge",
+      input: { eventId: "E1" },
+      bearer: "t-eve",
+      surface,
+    }));
+    const kinds = async (policy: Layer.Layer<Policy>) =>
+      (
+        await Effect.runPromise(
+          runSequence(acknowledgeAsEve, "chosen").pipe(
+            Effect.provide(Layer.merge(principalsLayer, policy)),
+          ),
+        )
+      ).observations.map((observation) =>
+        observation.kind === "failure" ? observation.error : observation.kind,
+      );
+    const refused = await kinds(inMemoryPolicy(testGrants));
+    for (const each of refused)
+      expect(each).toMatchObject({ _tag: "NotAllowed" });
+    const granted = await kinds(
+      inMemoryPolicy({
+        ...testGrants,
+        "slack-user-t0000-u0009": [permissions.acknowledge],
+      }),
+    );
+    expect(granted).toEqual(surfaces.map(() => "success"));
+  });
+});
+
+describe("an unexpected failure", () => {
+  const secret = "secret-detail-7f3a";
+  const explode = defineAction({
+    name: "explode",
+    description: "Dies with a message no surface may show.",
+    kind: "mutation",
+    input: { eventId: Schema.String },
+    success: Schema.Struct({ ok: Schema.Boolean }),
+    errors: [],
+    permission: permissions.read,
+    handler: () => Effect.die(new Error(secret)),
+  });
+
+  it("is a defect on every surface, leaks nothing, and reaches the server log", async () => {
+    const logged: string[] = [];
+    const serverLog = Logger.layer([
+      Logger.make(({ cause }) => {
+        logged.push(Cause.pretty(cause));
+      }),
+    ]);
+    const program = Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* makeWorld([
+          provideAction(explode, Context.empty()),
+        ]);
+        const observations = [];
+        for (const surface of surfaces)
+          observations.push(
+            yield* world.call({
+              action: "explode",
+              input: { eventId: "E1" },
+              bearer: "t-alice",
+              surface,
+            }),
+          );
+        const response = yield* Effect.promise(async () =>
+          world.fetch(
+            new Request("http://actions.invalid/explode", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: "Bearer t-alice",
+              },
+              body: JSON.stringify({ eventId: "E1" }),
+            }),
+          ),
+        );
+        const body = yield* Effect.promise(async () => response.text());
+        return { observations, status: response.status, body };
+      }),
+    ).pipe(Effect.provide(Layer.merge(platformLayer, serverLog)));
+    const result = await Effect.runPromise(program);
+    expect(result.observations).toEqual(
+      surfaces.map(() => ({ kind: "defect" })),
+    );
+    expect(result.status).toBe(500);
+    expect(result.body).toBe("");
+    expect(JSON.stringify(result.observations)).not.toContain(secret);
+    // The operator sees it: McpServer logs a tool's defect on the server.
+    expect(logged.some((line) => line.includes(secret))).toBe(true);
+  });
+});
+
+describe("what a handler receives", () => {
+  const bearer = "t-alice";
+  const principal = "slack-user-t0000-u0001";
+  const seen: Array<{
+    readonly principal: string;
+    readonly services: readonly string[];
+  }> = [];
+  const inspect = defineAction({
+    name: "inspect",
+    description: "Reports what its handler can see.",
+    kind: "mutation",
+    input: { eventId: Schema.String },
+    success: Schema.Struct({ ok: Schema.Boolean }),
+    errors: [],
+    permission: permissions.read,
+    handler: (_input, who) =>
+      Effect.gen(function* () {
+        const context = yield* Effect.context<never>();
+        seen.push({ principal: who, services: [...context.mapUnsafe.keys()] });
+        return { ok: true };
+      }),
+  });
+
+  // The surface whose handlers serve a call: atoms call the REST handlers.
+  const servedBy = {
+    rest: "rest",
+    atom: "rest",
+    mcp: "mcp",
+    rpc: "rpc",
+    direct: "direct",
+  };
+
+  it("is the principal, on exactly the services its surface was built with", async () => {
+    const built = new Map<string, readonly string[]>();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = yield* makeWorld([
+            provideAction(inspect, Context.empty()),
+          ]);
+          for (const surface of surfaces)
+            yield* world.call({
+              action: "inspect",
+              input: { eventId: "E1" },
+              bearer,
+              surface,
+            });
+        }),
+      ).pipe(
+        Effect.provide(platformLayer),
+        Effect.provideService(SurfaceServices, {
+          built: (surface, keys) => {
+            built.set(surface, keys);
+          },
+        }),
+      ),
+    );
+    expect(seen).toHaveLength(surfaces.length);
+    for (const [index, surface] of surfaces.entries()) {
+      const each = seen[index];
+      const expected = built.get(servedBy[surface]);
+      expect(each?.principal).toBe(principal);
+      // Any service the request added, whatever its name, fails this.
+      expect(expected).toBeDefined();
+      expect([...(each?.services ?? [])].sort()).toEqual(
+        [...(expected ?? [])].sort(),
+      );
+    }
+  });
+});
+
+describe("the MCP endpoint", () => {
+  it("takes the bearer from the Authorization header only, never from the payload", async () => {
+    const services = Context.make(ReceiptStore, makeStore(["E1"]));
+    const post = (headers: Record<string, string>, meta: object) =>
+      new Request(`http://actions.invalid${mcpPath}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+          "mcp-method": "tools/call",
+          "mcp-name": "getReceipt",
+          ...headers,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "getReceipt",
+            arguments: { eventId: "E1" },
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientInfo": {
+                name: "test",
+                version: "0.0.1",
+              },
+              "io.modelcontextprotocol/clientCapabilities": {},
+              ...meta,
+            },
+          },
+        }),
+      });
+    const texts = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = yield* makeWorld([provideAction(getReceipt, services)]);
+          const answer = (request: Request) =>
+            Effect.promise(async () => (await world.fetch(request)).text());
+          return [
+            yield* answer(post({}, { "mimukodik.action/bearer": "t-alice" })),
+            yield* answer(post({ authorization: "Bearer t-alice" }, {})),
+          ];
+        }),
+      ).pipe(Effect.provide(platformLayer)),
+    );
+    expect(texts[0]).toContain("Unauthenticated");
+    expect(texts[1]).toContain('\\"receipt\\":null');
+    expect(texts[1]).not.toContain("Unauthenticated");
+  });
+});

@@ -74,7 +74,9 @@
         "src/sim/slack-fake.ts",
         "src/sim/choices.ts",
         "src/sim/runtime.ts",
-        "src/sim/conformance/fixture.ts"
+        "src/sim/conformance/fixture.ts",
+        "src/hub/task.ts",
+        "src/hub/sim/model.ts"
       ],
       "rules": {
         "no-restricted-globals": [
@@ -231,7 +233,18 @@
         "src/shell.ts",
         "src/mcp.ts",
         "src/slack-api.ts",
-        "src/log.ts"
+        "src/log.ts",
+        "src/action/action.ts",
+        "src/action/receipts.ts",
+        "src/action/policy.ts",
+        "src/action/http.ts",
+        "src/action/mcp.ts",
+        "src/action/atoms.ts",
+        "src/action/rpc.ts",
+        "src/action/harness.ts",
+        "src/action/agreement.ts",
+        "src/hub/store.ts",
+        "src/hub/actions.ts"
       ],
       "rules": {
         "no-restricted-globals": [
