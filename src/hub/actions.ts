@@ -7,7 +7,7 @@
 // Every mutation takes a requestKey chosen by the caller. The same key with
 // the same input returns the first answer, refusal or not, and adds no
 // event; the same key with another input is RequestKeyReused.
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 
 import { defineAction, type ErrorSchema } from "../action/action.ts";
 import { type Outcome, type Request, TaskStore } from "./store.ts";
@@ -47,6 +47,7 @@ export const permissions = {
   fail: "task.fail",
   get: "task.get",
   events: "task.events",
+  waiting: "task.waiting",
 } as const;
 
 export const RequestKey = Schema.String.check(
@@ -320,6 +321,35 @@ export const taskEvents = defineAction({
     }),
 });
 
+export const Waiter = Schema.Struct({
+  task: Task,
+  // How long the task has waited on the principal, at the time of the read.
+  ageMs: Schema.Int,
+});
+
+export const taskWaiting = defineAction({
+  name: "taskWaiting",
+  description:
+    "Reads the tasks waiting on a principal's answer, longest waiting first, each with how long it has waited: that principal's inbox.",
+  kind: "query",
+  input: { principal: PrincipalId, limit: EventLimit },
+  success: Schema.Struct({ tasks: Schema.Array(Waiter) }),
+  errors: [],
+  permission: permissions.waiting,
+  handler: ({ principal, limit }) =>
+    Effect.gen(function* () {
+      const store = yield* TaskStore;
+      const now = yield* Clock.currentTimeMillis;
+      const tasks = yield* store.waitingOn(principal, limit);
+      return {
+        tasks: tasks.map((task) => ({
+          task,
+          ageMs: now - (task.input?.since ?? now),
+        })),
+      };
+    }),
+});
+
 export const hubActions = [
   taskCreate,
   taskClaim,
@@ -332,4 +362,5 @@ export const hubActions = [
   taskFail,
   taskGet,
   taskEvents,
+  taskWaiting,
 ] as const;

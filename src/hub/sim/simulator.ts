@@ -51,6 +51,8 @@ export type HubCoverage = {
   wrongAnswerers: number;
   notAnOption: number;
   eventReads: number;
+  // Inbox reads that found at least one task waiting.
+  inboxHits: number;
   finals: number;
 };
 
@@ -68,6 +70,7 @@ export const emptyCoverage = (): HubCoverage => ({
   wrongAnswerers: 0,
   notAnOption: 0,
   eventReads: 0,
+  inboxHits: 0,
   finals: 0,
 });
 
@@ -134,6 +137,7 @@ function ruleOf(action: string, keyUsed: boolean, wasFinal: boolean): string {
   if (wasFinal) return "T3";
   if (action === "taskAnswer") return "T5";
   if (action === "taskEvents") return "T4";
+  if (action === "taskWaiting") return "inbox";
   if (
     [
       "taskRenew",
@@ -255,6 +259,12 @@ class Driver {
     if (tag === "LeaseNotHeld" && prior?.claimant === principal)
       this.coverage.staleHolderRefused += 1;
     if (call.action === "taskEvents") this.coverage.eventReads += 1;
+    if (
+      call.action === "taskWaiting" &&
+      actual.kind === "success" &&
+      canonical(actual.value).includes('"ageMs"')
+    )
+      this.coverage.inboxHits += 1;
     if (flight.repeat || actual.kind !== "success") return;
     const added = flight.after.events.slice(flight.before.events.length);
     for (const event of added) {
@@ -283,6 +293,12 @@ class Driver {
   // A restarted process's first look at the store: as of the last commit,
   // with or without the call that was in flight.
   restarted(snapshot: Snapshot): void {
+    // The store's own events first, so a forbidden change names its rule.
+    const fault = ruleFault(snapshot);
+    if (fault !== undefined) {
+      this.failure = fault;
+      return;
+    }
     const flight = this.inFlight;
     if (flight === undefined) {
       if (!this.model.snapshotEquals(snapshot))
@@ -299,8 +315,6 @@ class Driver {
       // The first attempt committed: the retry must get its answer back.
       this.inFlight = { ...flight, before: flight.after };
     }
-    const fault = ruleFault(snapshot);
-    if (fault !== undefined) this.failure = `T7, then ${fault}`;
   }
 
   get crashable(): boolean {
@@ -337,6 +351,7 @@ class Driver {
       "taskFail",
       "taskGet",
       "taskEvents",
+      "taskWaiting",
     ]);
     const input = this.inputFor(action, bearer);
     const call = {
@@ -345,7 +360,8 @@ class Driver {
       surface,
       input,
     };
-    if (!["taskGet", "taskEvents"].includes(action)) this.last = call;
+    if (!["taskGet", "taskEvents", "taskWaiting"].includes(action))
+      this.last = call;
     return call;
   }
 
@@ -447,6 +463,18 @@ class Driver {
         return { requestKey, taskId: holder(), reason: "red ci" };
       case "taskGet":
         return { taskId: this.target(bearer, () => false) };
+      case "taskWaiting": {
+        const waited = [...this.model.tasks.values()].flatMap((task) =>
+          task.input === null ? [] : [task.input.waitingOn],
+        );
+        return {
+          principal:
+            waited.length > 0 && this.chance(70)
+              ? this.pick(waited)
+              : (hubPrincipals[this.pick(callers)] ?? ""),
+          limit: this.pick([1, 5, 200]),
+        };
+      }
       default:
         return {
           after: this.int(this.model.events.length + 2),

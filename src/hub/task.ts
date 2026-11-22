@@ -70,6 +70,13 @@ export const InputRequest = Schema.Struct({
   waitingOn: PrincipalId,
 });
 
+// A task's pending input request: the question, who it waits on, and since
+// when (the time of its inputRequested event).
+export const Waiting = Schema.Struct({
+  ...InputRequest.fields,
+  since: Schema.Int,
+});
+
 export const TaskResult = Schema.Struct({
   text: Text,
   url: Schema.NullOr(Url),
@@ -88,7 +95,7 @@ export const Task = Schema.Struct({
   leaseExpiresAt: Schema.NullOr(Schema.Int),
   // What was left of the lease when it was suspended for input.
   leaseRemainingMs: Schema.NullOr(Schema.Int),
-  input: Schema.NullOr(InputRequest),
+  input: Schema.NullOr(Waiting),
   result: Schema.NullOr(TaskResult),
   reason: Schema.NullOr(Text),
   createdAt: Schema.Int,
@@ -434,6 +441,7 @@ function applied(task: Task, event: Event): Task {
           question: change.question,
           options: change.options,
           waitingOn: change.waitingOn,
+          since: at,
         },
         leaseRemainingMs: (task.leaseExpiresAt ?? at) - at,
         leaseExpiresAt: null,

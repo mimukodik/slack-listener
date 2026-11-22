@@ -83,6 +83,11 @@ export class TaskStore extends Context.Service<
       after: number,
       limit: number,
     ) => Effect.Effect<readonly Event[]>;
+    // The tasks waiting on a principal's answer, longest waiting first.
+    readonly waitingOn: (
+      principal: string,
+      limit: number,
+    ) => Effect.Effect<readonly Task[]>;
     readonly snapshot: Effect.Effect<Snapshot>;
   }
 >()("hub/TaskStore") {}
@@ -303,7 +308,19 @@ const makeStore = Effect.gen(function* () {
     };
   }).pipe(Effect.catchTag(["SqlError", "SchemaError"], Effect.die));
 
-  return TaskStore.of({ execute, get, events, snapshot });
+  const waitingOn = (principal: string, limit: number) =>
+    sql`SELECT body FROM hub_tasks WHERE state = ${"input-required"} ORDER BY seq`.pipe(
+      Effect.flatMap(taskRows),
+      Effect.map((tasks) =>
+        tasks
+          .filter((task) => task.input?.waitingOn === principal)
+          .sort((a, b) => (a.input?.since ?? 0) - (b.input?.since ?? 0))
+          .slice(0, Math.min(limit, limits.eventsPerReadMax)),
+      ),
+      Effect.catchTag(["SqlError", "SchemaError"], Effect.die),
+    );
+
+  return TaskStore.of({ execute, get, events, waitingOn, snapshot });
 });
 
 function done(outcome: Outcome): Answer {

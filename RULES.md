@@ -157,6 +157,9 @@ sessions, page or Slack.
   the time it had left when the answer comes.
 - **Ready:** a submitted task, or a working one whose lease has lapsed. A claim takes
   the oldest ready task that has the labels it asks for.
+- **Waiting:** an input-required task waits on one principal, since the time it
+  asked. That principal's inbox lists every task waiting on it, longest first, each
+  with how long it has waited.
 - **Event:** one change to a task, with a cursor, the task, the kind of change, the
   principal that made it (its actor), the time and the change's own fields.
 - **Request key:** a key the caller chooses for each change it asks for.

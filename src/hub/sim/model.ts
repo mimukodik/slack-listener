@@ -15,7 +15,7 @@ export type Expected =
 export type Input = Readonly<Record<string, unknown>>;
 
 const final: readonly State[] = ["completed", "failed", "canceled"];
-const queries = new Set(["taskGet", "taskEvents"]);
+const queries = new Set(["taskGet", "taskEvents", "taskWaiting"]);
 const permissionOf = (action: string) =>
   `task.${action.slice(4, 5).toLowerCase()}${action.slice(5)}`;
 
@@ -78,7 +78,7 @@ export class Model {
       (hubGrants as Readonly<Record<string, readonly string[]>>)[principal] ??
       [];
     if (!granted.includes(permissionOf(action))) return fail("NotAllowed");
-    if (queries.has(action)) return this.query(action, input);
+    if (queries.has(action)) return this.query(action, input, now);
     const key = `${principal} ${str(input, "requestKey")}`;
     const fingerprint = fingerprintOf(action, input);
     const prior = this.requests.get(key);
@@ -91,7 +91,24 @@ export class Model {
     return answer;
   }
 
-  private query(action: string, input: Input): Expected {
+  private query(action: string, input: Input, now: number): Expected {
+    if (action === "taskWaiting") {
+      const principal = str(input, "principal");
+      const waiting = [...this.tasks.values()]
+        .filter(
+          (task) =>
+            task.state === "input-required" &&
+            task.input?.waitingOn === principal,
+        )
+        .sort((a, b) => (a.input?.since ?? 0) - (b.input?.since ?? 0))
+        .slice(0, num(input, "limit"));
+      return ok({
+        tasks: waiting.map((task) => ({
+          task,
+          ageMs: now - (task.input?.since ?? now),
+        })),
+      });
+    }
     if (action === "taskEvents") {
       const after = num(input, "after");
       return ok({
@@ -263,7 +280,7 @@ export class Model {
         const next: Task = {
           ...task,
           state: "input-required",
-          input: request,
+          input: { ...request, since: now },
           leaseRemainingMs: (task.leaseExpiresAt ?? now) - now,
           leaseExpiresAt: null,
         };
@@ -354,6 +371,7 @@ type Replayed = {
   remaining: number | null;
   waitingOn: string | null;
   options: readonly string[];
+  lastAt: number;
 };
 
 function lease(seen: Replayed, event: Event): void {
@@ -423,15 +441,22 @@ export function ruleFault(snapshot: Snapshot): string | undefined {
       remaining: null,
       waitingOn: null,
       options: [],
+      lastAt: event.at,
     };
+    next.lastAt = event.at;
     const target = to[event.change._tag] ?? "same";
     if (target !== "same") next.state = target;
     lease(next, event);
     replay.set(event.taskId, next);
   }
-  for (const task of snapshot.tasks)
-    if (replay.get(task.id)?.state !== task.state)
-      return `T1: ${task.id} is ${task.state}, its events say ${replay.get(task.id)?.state ?? "nothing"}`;
+  for (const task of snapshot.tasks) {
+    const seen = replay.get(task.id);
+    // A row changed later than its last event is a change with no event.
+    if (seen !== undefined && seen.lastAt !== task.updatedAt)
+      return `T4: ${task.id} changed at ${task.updatedAt}, its last event is at ${seen.lastAt}`;
+    if (seen?.state !== task.state)
+      return `T1: ${task.id} is ${task.state}, its events say ${seen?.state ?? "nothing"}`;
+  }
   if (replay.size !== snapshot.tasks.length)
     return `T4: ${replay.size} tasks in the events, ${snapshot.tasks.length} in the table`;
   return undefined;

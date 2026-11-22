@@ -118,6 +118,10 @@ const input: Record<string, fc.Arbitrary<Record<string, unknown>>> = {
     after: fc.constantFrom(0, 1, 3, -1),
     limit: fc.constantFrom(1, 5, 200, 0),
   }),
+  taskWaiting: fc.record({
+    principal: fc.oneof(principal, fc.constant("")),
+    limit: fc.constantFrom(1, 5, 0),
+  }),
 };
 
 const call: fc.Arbitrary<Call> = fc
@@ -281,6 +285,90 @@ describe("the task hub's actions", () => {
   });
 });
 
+describe("the inbox", () => {
+  it("lists the tasks waiting on a principal, longest first, with how long each has waited", async () => {
+    const ann = "slack-user-t0000-u0001";
+    const step = (
+      bearer: string,
+      action: string,
+      input: Record<string, unknown>,
+    ): Call => ({ action, input, bearer, surface: "rest" });
+    const ask = (taskId: string, requestKey: string) =>
+      step("h-agent1", "taskRequestInput", {
+        taskId,
+        requestKey,
+        question: "merge?",
+        options: ["yes", "no"],
+        waitingOn: ann,
+      });
+    const inbox = (principal: string) =>
+      step("h-ben", "taskWaiting", { principal, limit: 10 });
+    const claim = (requestKey: string) =>
+      step("h-agent1", "taskClaim", {
+        requestKey,
+        labels: [],
+        leaseMs: 60_000,
+      });
+    const timed: Timed = {
+      calls: [
+        step("h-ben", "taskCreate", {
+          requestKey: "c1",
+          title: "a",
+          labels: [],
+        }),
+        step("h-ben", "taskCreate", {
+          requestKey: "c2",
+          title: "b",
+          labels: [],
+        }),
+        claim("k1"),
+        claim("k2"),
+        ask("T2", "q2"),
+        ask("T1", "q1"),
+        inbox(ann),
+        inbox("agent-a0002"),
+        step("h-ann", "taskAnswer", {
+          taskId: "T2",
+          requestKey: "a",
+          option: "yes",
+        }),
+        inbox(ann),
+      ],
+      at: [0, 0, 10, 10, 1000, 2500, 4000, 4000, 5000, 6000],
+    };
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const beneath = yield* Clock.Clock;
+        const now = { ms: 0 };
+        return yield* runSequenceWith(hubFixture, timed.calls, "chosen", {
+          before: (index) => {
+            now.ms = timed.at[index] ?? now.ms;
+          },
+        }).pipe(
+          Effect.provideService(
+            Clock.Clock,
+            settableClock(beneath, () => now.ms),
+          ),
+        );
+      }).pipe(Effect.provide(hubPlatformLayer)),
+    );
+    const listed = (index: number) => {
+      const observation = run.observations[index];
+      if (observation?.kind !== "success") throw new Error("not a success");
+      const { tasks } = observation.value as {
+        tasks: Array<{ task: { id: string }; ageMs: number }>;
+      };
+      return tasks.map((each) => [each.task.id, each.ageMs]);
+    };
+    expect(listed(6)).toEqual([
+      ["T2", 3000],
+      ["T1", 1500],
+    ]);
+    expect(listed(7)).toEqual([]);
+    expect(listed(9)).toEqual([["T1", 3500]]);
+  });
+});
+
 describe("what a hub handler receives", () => {
   const servedBy = {
     rest: "rest",
@@ -316,6 +404,7 @@ describe("what a hub handler receives", () => {
       taskFail: { taskId: "T1", requestKey: "k", reason: "r" },
       taskGet: { taskId: "T1" },
       taskEvents: { after: 0, limit: 5 },
+      taskWaiting: { principal: "agent-a0001", limit: 5 },
     };
     await Effect.runPromise(
       Effect.scoped(
