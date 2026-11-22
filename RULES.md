@@ -137,8 +137,11 @@ digits and a dot.
   logged with its `ts`, when that decodes, its field and what was expected, and
   not delivered. The rest of the page is read, so catch-up ends and the listener
   goes live. Each later catch-up that reads the message skips it again. A thread
-  parent read alone for its quote is not a page; one that does not decode is left
-  out, as above.
+  parent that does not decode still has its replies read, as long as its `ts`,
+  `reply_count` and `latest_reply` decode; when one of them does not, replies posted
+  in that thread while the listener was away are not delivered unless also sent to
+  the channel. A thread parent read alone for its quote is not a page; one that does
+  not decode is left out, as above.
 - **R22. A line from the session that does not decode is answered with the JSON-RPC
   error.** A line that is not JSON gets a parse error (-32700) with a null id. One
   that is not a JSON-RPC 2.0 request (no method, a method or id of the wrong type, a
