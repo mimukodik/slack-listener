@@ -140,3 +140,46 @@ posting stays off until `posting: true` is set in the configuration.
   that thread got no new reply since. Slack's history does not show it; finding it would
   mean reading every thread of the last 7 days on each reconnect. Edits received live
   are delivered (R2, R5).
+
+## The task hub
+
+Added 2026-11-22 (BER-2368, slice B1). The hub is a record of tasks that people and
+agents share: what each task waits on, from whom and since when. It is a separate
+part of this repository with its own rules, T1 and on; the R rules above are the
+listener's and do not apply to it. Step B1 is the store and its actions, with no
+sessions, page or Slack.
+
+- **Task:** a title, labels and the principal that created it, in exactly one of
+  A2A's states: `submitted`, `working`, `input-required`, `completed`, `failed`,
+  `canceled`. The last three are final.
+- **Lease:** a claim on a task by one principal until an expiry time. It is live
+  until that time. It is suspended while the task waits on input and resumes with
+  the time it had left when the answer comes.
+- **Ready:** a submitted task, or a working one whose lease has lapsed. A claim takes
+  the oldest ready task that has the labels it asks for.
+- **Waiting:** an input-required task waits on one principal, since the time it
+  asked. That principal's inbox lists every task waiting on it, longest first, each
+  with how long it has waited.
+- **Event:** one change to a task, with a cursor, the task, the kind of change, the
+  principal that made it (its actor), the time and the change's own fields.
+- **Request key:** a key the caller chooses for each change it asks for.
+
+- **T1. One state, moved only by the table.** A task is in exactly one state, and
+  changes state only as the hub's transition table allows.
+- **T2. One lease holder.** At most one principal holds a live lease on a task. Only
+  the principal holding the live lease can renew it, request input, complete the task
+  or fail it.
+- **T3. Final is final.** A task reaches a final state at most once and never leaves
+  it.
+- **T4. Every change is one event.** Every change to a task is exactly one event,
+  naming its actor. Reading the events after cursor c returns every later event once,
+  in the order they were committed.
+- **T5. Only the one asked answers.** Only the principal a task waits on can answer
+  it, and only with one of the options it was offered.
+- **T6. A repeated request changes nothing.** A request repeated with the same key
+  returns the first answer and changes nothing.
+- **T7. A crash loses nothing committed.** A crash at any point leaves the store as
+  of the last commit, and every rule holds after the restart.
+
+Out of scope for the hub in B1: who may call which action is the platform's Policy,
+not a T rule; a task's creator is the only one who may amend or cancel it.
