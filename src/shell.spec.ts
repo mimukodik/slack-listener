@@ -3,11 +3,13 @@ import { describe, expect, it } from "bun:test";
 import {
   Cause,
   Deferred,
+  Duration,
   Effect,
   FiberMap,
   FileSystem,
   Layer,
   Queue,
+  Schedule,
   Sink,
   Stdio,
   Stream,
@@ -20,7 +22,10 @@ import { defaultLimits, type TimerName } from "./core.ts";
 import { channelInstructions } from "./format.ts";
 import { makeLog } from "./log.ts";
 import { ChannelServer } from "./mcp.ts";
-import { readSaved, replaceTimer, runShell } from "./shell.ts";
+import { backoffSchedule, readSaved, replaceTimer, runShell } from "./shell.ts";
+import { host, withTripwire } from "./sim/host.ts";
+import { SimRuntime } from "./sim/runtime.ts";
+import { simStartMs } from "./sim/simulator.ts";
 import { redact, SlackApi } from "./slack-api.ts";
 import { msToTs } from "./slack.ts";
 
@@ -654,5 +659,315 @@ describe("the shell as an Effect program", () => {
       ),
     );
     expect(fired).toEqual(["second"]);
+  });
+});
+
+// The whole shell on the simulator's virtual clock, with a scripted Slack
+// whose answers come at once, so the time between two calls is exactly the
+// wait the shell chose (PRINCIPLES.md: effect-does-the-waiting).
+function virtualShell(
+  seed: number,
+  slack: (method: string, params: URLSearchParams) => object,
+  onSocket: (socket: FakeSocket, runtime: SimRuntime) => void,
+  options: { initializedAtMs: number } = { initializedAtMs: 0 },
+) {
+  const runtime = new SimRuntime(seed, [], simStartMs, false);
+  const stdio = session();
+  // Each Web API call as "ms-since-start method timestamp".
+  const calls: string[] = [];
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const method = url.pathname.split("/").at(-1) ?? "";
+    const body = init?.body;
+    const params = new URLSearchParams(
+      body instanceof Uint8Array
+        ? decoder.decode(body)
+        : typeof body === "string" || body instanceof URLSearchParams
+          ? body.toString()
+          : "",
+    );
+    calls.push(
+      `${runtime.nowMs - simStartMs} ${method}${params.has("timestamp") ? ` ${params.get("timestamp") ?? ""}` : ""}`,
+    );
+    return new Response(JSON.stringify(slack(method, params)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+  const program = Effect.gen(function* () {
+    const log = yield* makeLog;
+    const sink = yield* ChannelServer.make({
+      name: "slack-listener",
+      version: "0.0.0",
+      instructions: channelInstructions,
+      log,
+    });
+    const api = yield* SlackApi.make("xoxb-test", "xapp-test");
+    yield* runShell(
+      { ...testConfig, core: { ...testConfig.core, ...defaultLimits } },
+      { api, sink, log },
+      null,
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        stdio.layer,
+        FileSystem.layerNoop({
+          makeDirectory: () => Effect.void,
+          writeFileString: () => Effect.void,
+          rename: () => Effect.void,
+        }),
+        FetchHttpClient.layer,
+        Layer.succeed(Socket.WebSocketConstructor)(() => {
+          const socket = new FakeSocket();
+          onSocket(socket, runtime);
+          return socket;
+        }),
+      ),
+    ),
+    Effect.provideService(FetchHttpClient.Fetch, fetch),
+  );
+  const run = async (stopAtMs: number) => {
+    const { value, tripped } = await withTripwire(async () => {
+      runtime.start(program);
+      runtime.at(0, () => stdio.send(initialize));
+      runtime.at(options.initializedAtMs, () => stdio.send(initialized));
+      runtime.at(stopAtMs, () => stdio.close());
+      return runtime.run(
+        { stepsMax: 200_000, timeMsMax: simStartMs + stopAtMs + 60_000 },
+        host,
+      );
+    });
+    expect(tripped).toEqual([]);
+    expect(value.kind).toBe("done");
+  };
+  return { runtime, stdio, calls, run };
+}
+
+// The time between each call of a method and the one before it.
+function gaps(calls: readonly string[], method: string): number[] {
+  const times = calls
+    .filter((call) => call.split(" ")[1] === method)
+    .map((call) => Number(call.split(" ")[0]));
+  return times.slice(1).map((at, i) => at - (times[i] ?? 0));
+}
+
+describe("retries on a virtual clock", () => {
+  // The old computation capped the exponent at 16 so the doubling could not
+  // overflow; the schedule's own doubling reaches Infinity after 1,024 tries,
+  // about 17 hours of outage at 60 s, and must still give the cap.
+  it("R8: the backoff stays at its cap long after the doubling overflows", async () => {
+    const delays = await Effect.runPromise(
+      Effect.gen(function* () {
+        const next = yield* Schedule.toStep(backoffSchedule(60_000));
+        const out: number[] = [];
+        for (let i = 0; i < 2000; i += 1) {
+          const [, delay] = yield* Effect.orDie(next(i * 60_000, undefined));
+          out.push(Duration.toMillis(delay));
+        }
+        return out;
+      }),
+    );
+    expect(delays.slice(0, 8)).toEqual([
+      1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000,
+    ]);
+    expect(new Set(delays.slice(6))).toEqual(new Set([60000]));
+  });
+
+  // R8: 1 s doubling, capped at 60 s; going live starts the run over.
+  it("R8: reconnects after 1, 2, 4 … 32 s, then every 60 s, and starts over once live", async () => {
+    for (const seed of [1, 2, 3]) {
+      let opens = 0;
+      // The first nine opens fail, the tenth goes live, and its socket drops
+      // 10 s later; the eleventh fails and the twelfth goes live again.
+      const failing = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 11]);
+      const shell = virtualShell(
+        seed,
+        (method) => {
+          if (method !== "apps.connections.open")
+            return slackBodies[method] ?? { ok: false };
+          opens += 1;
+          return failing.has(opens)
+            ? { ok: false, error: "internal_error" }
+            : (slackBodies[method] ?? { ok: false });
+        },
+        (socket, runtime) => {
+          const first = opens === 10;
+          runtime.at(1, () => socket.open());
+          runtime.at(2, () => socket.frame({ type: "hello" }));
+          if (first) runtime.at(10_000, () => socket.close(1006));
+        },
+      );
+      await shell.run(300_000);
+      expect(gaps(shell.calls, "apps.connections.open")).toEqual([
+        1000,
+        2000,
+        4000,
+        8000,
+        16000,
+        32000,
+        60000,
+        60000,
+        60000,
+        // The tenth went live and its socket closed 10 s later; the wait
+        // after that is 1 s again, not 60.
+        10_000 + 1000,
+        2000,
+      ]);
+      expect(shell.stdio.stderr.join("")).toContain(
+        "slack connection connect_failed: apps.connections.open: internal_error",
+      );
+    }
+  });
+
+  // R8: a failed catch-up read waits on the connection's run too, so it
+  // continues the wait a failed open started.
+  it("R8: a failed catch-up continues the connection's run of waits", async () => {
+    let opens = 0;
+    let reads = 0;
+    const shell = virtualShell(
+      1,
+      (method) => {
+        if (method === "apps.connections.open") opens += 1;
+        if (method === "conversations.history") reads += 1;
+        if (method === "apps.connections.open" && opens === 1)
+          return { ok: false, error: "internal_error" };
+        if (method === "conversations.history" && reads <= 2)
+          return { ok: false, error: "internal_error" };
+        return slackBodies[method] ?? { ok: false };
+      },
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+      },
+    );
+    await shell.run(60_000);
+    expect(gaps(shell.calls, "apps.connections.open")).toEqual([1000]);
+    expect(gaps(shell.calls, "conversations.history")).toEqual([2000, 4000]);
+  });
+
+  // A delivery written while the session has not initialized fails and is
+  // tried again on its own run of waits; its seen mark follows at once.
+  it("a failed delivery is tried again after 1, 2 and 4 s", async () => {
+    const shell = virtualShell(
+      1,
+      (method) => slackBodies[method] ?? { ok: false },
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+        runtime.at(1000, () =>
+          socket.frame(
+            envelope("E1", {
+              type: "message",
+              channel: "C0WATCH001",
+              user: "U0OTHER01",
+              text: "early",
+              ts: msToTs(runtime.nowMs),
+            }),
+          ),
+        );
+      },
+      // initialized comes after the first three tries.
+      { initializedAtMs: 1000 + 3000 + 5000 },
+    );
+    await shell.run(60_000);
+    const added = shell.calls.filter((call) => call.includes("reactions.add"));
+    // Held 3 s, then tried at 4000, 5000, 7000 and written at 11000.
+    expect(added.map((call) => Number(call.split(" ")[0]))).toEqual([11_000]);
+    expect(
+      shell.stdio.stderr.join("").split("delivery failed:").length - 1,
+    ).toBe(3);
+  });
+
+  // R18: three tries at 0, 1 and 3 s, then given up; the next call goes on.
+  describe("R18: a reaction call", () => {
+    const deliverTwo = (
+      first: (tried: number) => object,
+    ): ReturnType<typeof virtualShell> => {
+      const tries = new Map<string, number>();
+      const shell = virtualShell(
+        1,
+        (method, params) => {
+          const ts = params.get("timestamp") ?? "";
+          if (method !== "reactions.add" || ts !== firstTs)
+            return slackBodies[method] ?? { ok: false };
+          const tried = (tries.get(ts) ?? 0) + 1;
+          tries.set(ts, tried);
+          return first(tried);
+        },
+        (socket, runtime) => {
+          runtime.at(1, () => socket.open());
+          runtime.at(2, () => socket.frame({ type: "hello" }));
+          for (const [id, atMs] of [
+            ["E1", 1000],
+            ["E2", 1001],
+          ] as const)
+            runtime.at(atMs, () =>
+              socket.frame(
+                envelope(id, {
+                  type: "message",
+                  channel: "C0WATCH001",
+                  user: "U0OTHER01",
+                  text: id,
+                  ts: msToTs(runtime.nowMs),
+                }),
+              ),
+            );
+        },
+      );
+      return shell;
+    };
+    // The first message arrives 1 s after the start, the second 1 ms later.
+    const firstTs = msToTs(simStartMs + 1000);
+    const secondTs = msToTs(simStartMs + 1001);
+    const reactions = (calls: readonly string[]) =>
+      calls
+        .filter((call) => call.includes("reactions.add"))
+        .map((call) => {
+          const [at, , ts] = call.split(" ");
+          return `${at} ${ts === firstTs ? "first" : ts === secondTs ? "second" : ts}`;
+        });
+
+    it("that keeps failing is tried at 0, 1 and 3 s, given up, and the next goes on", async () => {
+      const shell = deliverTwo(() => ({ ok: false, error: "ratelimited" }));
+      await shell.run(60_000);
+      // Held 3 s from 1000, delivered and marked at 4000.
+      expect(reactions(shell.calls)).toEqual([
+        "4000 first",
+        "5000 first",
+        "7000 first",
+        "7000 second",
+      ]);
+      expect(shell.stdio.stderr.join("")).toContain(
+        `reaction add seen on ${firstTs} given up: ratelimited`,
+      );
+    });
+
+    it("that fails once is tried again after 1 s", async () => {
+      const shell = deliverTwo((tried) =>
+        tried === 1 ? { ok: false, error: "ratelimited" } : { ok: true },
+      );
+      await shell.run(60_000);
+      expect(reactions(shell.calls)).toEqual([
+        "4000 first",
+        "5000 first",
+        "5000 second",
+      ]);
+      expect(shell.stdio.stderr.join("")).not.toContain("given up");
+    });
+
+    it("answered as already done is not tried again", async () => {
+      for (const error of [
+        "already_reacted",
+        "no_reaction",
+        "message_not_found",
+      ]) {
+        const shell = deliverTwo(() => ({ ok: false, error }));
+        await shell.run(60_000);
+        expect(reactions(shell.calls)).toEqual(["4000 first", "4001 second"]);
+        expect(shell.stdio.stderr.join("")).not.toContain("given up");
+      }
+    });
   });
 });

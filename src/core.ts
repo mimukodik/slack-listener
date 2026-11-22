@@ -71,6 +71,13 @@ export interface Saved {
 
 export type TimerName = "reconnect" | "sink" | "tick" | "catch_up" | "release";
 
+// A run of tries the shell paces with its backoff schedule (R8). The core
+// decides which run a failed try belongs to and when a run is over; the
+// shell's schedule decides how long each wait is. Reconnects and catch-up
+// retries share the connection's run, which is over once the listener is
+// live; a delivery's run is over once the delivery is written.
+export type Backoff = "connection" | "delivery";
+
 export type CoreEvent =
   | { type: "started"; saved: Saved | null }
   | { type: "connected"; generation: number }
@@ -112,6 +119,8 @@ export type CoreEffect =
   | { type: "mark_answer"; ts: string; taken: boolean }
   | { type: "save"; saved: Saved }
   | { type: "set_timer"; name: TimerName; atMs: number }
+  | { type: "back_off"; backoff: Backoff; timer: TimerName }
+  | { type: "reset_backoff"; backoff: Backoff }
   | { type: "log"; message: string };
 
 export type Connection = "stopped" | "connecting" | "open" | "waiting";
@@ -132,7 +141,6 @@ export interface State {
   config: CoreConfig;
   connection: Connection;
   generation: number;
-  attempt: number;
   live: boolean;
   liveFromTs: string | null;
   lastFrameMs: number;
@@ -144,7 +152,6 @@ export interface State {
   claimed: Record<string, number>;
   queue: Delivery[];
   inflight: Delivery | null;
-  sinkAttempt: number;
   // R18: reaction calls in order, the head in flight when reactionInflight;
   // reacted maps a message carrying the seen mark to its thread, handled the
   // messages given the handled mark, answered a thread to the latest
@@ -176,7 +183,6 @@ export function initialState(config: CoreConfig): State {
     config,
     connection: "stopped",
     generation: 0,
-    attempt: 0,
     live: false,
     liveFromTs: null,
     lastFrameMs: 0,
@@ -188,7 +194,6 @@ export function initialState(config: CoreConfig): State {
     claimed: {},
     queue: [],
     inflight: null,
-    sinkAttempt: 0,
     reactions: [],
     reactionInflight: false,
     reacted: {},
@@ -197,10 +202,6 @@ export function initialState(config: CoreConfig): State {
     marked: {},
     reactionsDropped: 0,
   };
-}
-
-export function backoffMs(config: CoreConfig, attempt: number): number {
-  return Math.min(1000 * 2 ** Math.min(attempt, 16), config.maxBackoffMs);
 }
 
 export function isAgentPost(message: SlackMessage): boolean {
@@ -513,22 +514,13 @@ function pump(state: State, effects: CoreEffect[]): State {
   return pumped;
 }
 
-function scheduleReconnect(
-  state: State,
-  now: number,
-  effects: CoreEffect[],
-): State {
-  effects.push({
-    type: "set_timer",
-    name: "reconnect",
-    atMs: now + backoffMs(state.config, state.attempt),
-  });
+function scheduleReconnect(state: State, effects: CoreEffect[]): State {
+  effects.push({ type: "back_off", backoff: "connection", timer: "reconnect" });
   return {
     ...state,
     connection: "waiting",
     live: false,
     catchUp: null,
-    attempt: state.attempt + 1,
   };
 }
 
@@ -610,11 +602,11 @@ function finishCatchUp(
 ): State {
   const catchUp = state.catchUp;
   if (catchUp === null || catchUp.pending > 0) return state;
+  effects.push({ type: "reset_backoff", backoff: "connection" });
   let next: State = {
     ...state,
     catchUp: null,
     live: true,
-    attempt: 0,
     liveFromTs: msToTs(catchUp.startedAtMs),
   };
   next = release(next, now, catchUp.items, effects);
@@ -740,7 +732,7 @@ function reduce(
         type: "log",
         message: `slack connection ${event.type}: ${event.reason}`,
       });
-      return scheduleReconnect(state, now, effects);
+      return scheduleReconnect(state, effects);
     }
     case "hello": {
       if (event.generation !== state.generation || state.connection !== "open")
@@ -835,18 +827,16 @@ function reduce(
         message: `catch-up failed: ${event.reason}`,
       });
       effects.push({
-        type: "set_timer",
-        name: "catch_up",
-        atMs: now + backoffMs(state.config, state.attempt),
+        type: "back_off",
+        backoff: "connection",
+        timer: "catch_up",
       });
-      return { ...state, catchUp: null, attempt: state.attempt + 1 };
+      return { ...state, catchUp: null };
     }
     case "delivered": {
       if (state.inflight?.key !== event.key) return state;
-      const next = reactTo(
-        { ...state, inflight: null, sinkAttempt: 0 },
-        state.inflight,
-      );
+      const next = reactTo({ ...state, inflight: null }, state.inflight);
+      effects.push({ type: "reset_backoff", backoff: "delivery" });
       effects.push({ type: "save", saved: snapshot(next) });
       return pump(next, effects);
     }
@@ -856,12 +846,8 @@ function reduce(
         type: "log",
         message: `delivery failed: ${event.reason}`,
       });
-      effects.push({
-        type: "set_timer",
-        name: "sink",
-        atMs: now + backoffMs(state.config, state.sinkAttempt),
-      });
-      return { ...state, sinkAttempt: state.sinkAttempt + 1 };
+      effects.push({ type: "back_off", backoff: "delivery", timer: "sink" });
+      return state;
     }
     case "reaction_done": {
       const [head, ...rest] = state.reactions;
