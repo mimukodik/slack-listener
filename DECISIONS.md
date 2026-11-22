@@ -409,8 +409,52 @@ Step 4c of the plan, a behaviour change for malformed input only. `decode-at-the
 
 - **Open.**
   - A catch-up page holding one message that does not decode fails the whole read, which is tried again until Slack's answer changes, and nothing new is delivered meanwhile (R21). Dropping that message and reading on would keep the listener live; it is the "keep the parts that decode" choice for Slack's answers, not taken here. Real Slack sending a field of another type than the listener reads, a `null` for an absent field say, would trigger it; a surprise like that becomes a recorded fixture first.
-  - The fake Slack and the fake session send no malformed input, so the simulator does not exercise R19 to R22; the shell tests do. `faults-are-first-class` would generate them.
-  - The simulator still casts the state file it checks (`src/sim/world.ts:1159`) and the acknowledgement it reads (`src/sim/world.ts:125`), and `src/config.ts:71` keeps its cast; the cast ban is step 4d.
+  - The fake Slack and the fake session send no malformed input, so the simulator does not exercise R19 to R22; the shell tests do. `faults-are-first-class` would generate them. Settled for R20 to R22 the same day (addendum below); R19 waits for step 5a.
+  - The simulator still casts the state file it checks (`src/sim/world.ts:1390`) and the acknowledgement it reads (`src/sim/world.ts:175`), and `src/config.ts:71` keeps its cast; the cast ban is step 4d.
+
+### Addendum: malformed input in the simulator
+
+The review of the first 4c commit found that the simulator sent no malformed input, so R20 to R22 rested on the shell tests alone. The fakes now send it, drawn from the seeded choice stream like the other faults, and only in sampled runs, where faults are on:
+
+- **Socket Mode (R20):** before an envelope, in 3% of sends, a frame that does not decode and has no envelope id: not JSON, `null`, a string, an array, a numeric type, or an `events_api` frame with a numeric id. After a post, an edit or a deletion reaches the socket, in 4% of cases, an extra envelope whose message event does not decode: no `ts`, numeric text, a numeric `ts`, or an edit whose `edited` has no `ts`. Its `ts` is never stored at Slack, so no catch-up reads it.
+- **Web API (R21):** a quarter of the failures the fakes already inject, on catch-up reads, connection opens and reaction calls, come back as a 200 answer that does not decode as a whole (not JSON, `null`, `{}`, `"ok": "yes"`) instead of a network error.
+- **Session (R22):** after a delivery, in 10% of cases, the session sends a line that is not JSON, `null`, a request without a method, one with a numeric method, or a `done` call whose arguments are not an object.
+
+Not generated, on purpose:
+
+- A malformed message inside a catch-up history page. What one unreadable message in a page does, fail the read or skip and log it, is waiting on Greg (Open, above).
+- Anything for R19. A corrupt or old-format state file is a disk fault, and plan step 5a (disk faults) gives R19 its simulator check along with failing writes and renames.
+
+The checkers, one per rule the malformed input meets:
+
+| Rule                                         | Check                                                                                                                                                                                                                                                            |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| nothing undecodable is delivered (R20)       | a delivery whose `ts` is a malformed envelope's fails the run as it arrives                                                                                                                                                                                      |
+| an undecodable envelope is acknowledged once | a second ack for the same send fails the run as it arrives; one never acknowledged on a live socket fails the end-of-run R8 check. A send after a reconnect may be acknowledged once more                                                                        |
+| the connection goes on (R20)                 | the listener closing the socket within 100 ms of a frame that does not decode fails the run, unless the frame came after a silence past the idle limit, when the listener's idle reconnect (R8) may fall in the same moment, as it does on waking from sleep     |
+| the session goes on (R22)                    | the existing end check: the program must not exit before the session closes stdin                                                                                                                                                                                |
+| an undecodable API answer is a failed call   | no new check: an answer taken as a success leaves a catch-up short or a message without its marks, which the R7 and R18 end checks see; a call not tried again fails R8                                                                                          |
+| each bad session line gets its error (R22)   | the code each line is owed, by id, or in order for a null id; a wrong code, or an error no line asked for, fails the run as it arrives, and one still owed at the end fails it. Answers lost to a failing session write, and lines a crash cut off, are not owed |
+
+A violation found where a throw would reach the listener as a failed call or a defect, and fail the run under another rule's name, is recorded by `World.violation` instead, so the run fails with it.
+
+Mutants, each planted alone, run against the 2000-seed pass, the exhaustive pass at depth 4 and `src/sim/sim.spec.ts`; shell tests not run:
+
+| Mutant                                                           | 2000 seeds | First failure                                                                  | Exhaustive 4 |
+| ---------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------ | ------------ |
+| an envelope event that does not decode is repaired and delivered | 734 fail   | R20: delivered a `ts` whose event does not decode                              | pass         |
+| the message event is not decoded                                 | 1,734 fail | the listener stops: `text.split is not a function`                             | pass         |
+| an envelope that does not decode is not acknowledged             | 1,247 fail | R8: a live socket left an envelope unacknowledged                              | pass         |
+| an envelope that does not decode is acknowledged twice           | 1,753 fail | R20: acknowledged twice                                                        | pass         |
+| a frame that does not decode ends the connection                 | 1,625 fail | R20: the listener ended the connection 2 ms after a frame that does not decode | pass         |
+| a session line that is not JSON ends the reader                  | 645 fail   | R8: program exited before session closed                                       | pass         |
+| a Web API answer without `ok` reads as an empty success          | 1,176 fail | R18: a message keeps its seen mark after our side answered                     | pass         |
+| a session line that is not JSON is only logged                   | 173 fail   | R22: a session line that does not decode got no JSON-RPC error                 | pass         |
+| a line that is not a request is answered with invalid params     | 1,311 fail | R22: answered with -32602, expected -32600                                     | pass         |
+
+Each also fails the 200-run property test in `src/sim/sim.spec.ts`. The second row fails as a crash rather than under R20, because the core cannot read the undecoded event; the first row shows R20's own check.
+
+The exhaustive pass catches none of them: it runs with faults off, so it sends no malformed input. That also leaves its depth-7 result unchanged, coverage included (680,613 sequences, 0 violations, the eight counters equal to main's). The 2000-seed hash moves, from `a78246b8…63f2b` to `5f85a24a…20dd4`, because sampled runs draw new choices; every seed still passes, and every coverage counter, the four new ones included, stays above zero in the 200-run property test.
 
 ## Changes after the first green run
 
@@ -457,3 +501,4 @@ Step 4c of the plan, a behaviour change for malformed input only. `decode-at-the
 | 11-22, BER-2354 | R19 to R22 added: what a state file, a Socket Mode frame, a Web API answer and a session line that do not decode do                                                                                                                       | rules added                            | decode-at-the-boundary (step 4c): each was cast, and a malformed one could crash the listener or reach the core                                                                               |
 | 11-22, BER-2354 | out of scope: a message whose Socket Mode event does not decode is not delivered live                                                                                                                                                     | rule narrowed                          | R20 acknowledges it, so Slack does not send it again                                                                                                                                          |
 | 11-22, BER-2354 | the state file's first fields are required; a missing one is refused instead of read as empty or NaN                                                                                                                                      | stricter                               | R19: every version-1 file has written them since the first commit                                                                                                                             |
+| 11-22, BER-2354 | fake: Socket Mode frames and envelope events, Web API answers and session lines that do not decode; checks for R20 to R22                                                                                                                 | fault model wider, checker stricter    | review of 4c: the simulator sent no malformed input                                                                                                                                           |

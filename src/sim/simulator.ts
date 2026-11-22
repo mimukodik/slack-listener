@@ -40,6 +40,10 @@ export interface Coverage {
   reactionsRemoved: number;
   reactionFaults: number;
   doneMarks: number;
+  malformedFrames: number;
+  malformedEnvelopes: number;
+  malformedAnswers: number;
+  malformedLines: number;
 }
 
 export interface SimResult {
