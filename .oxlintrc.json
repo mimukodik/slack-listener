@@ -230,7 +230,14 @@
         "src/shell.ts",
         "src/mcp.ts",
         "src/slack-api.ts",
-        "src/log.ts"
+        "src/log.ts",
+        "src/action/action.ts",
+        "src/action/receipts.ts",
+        "src/action/http.ts",
+        "src/action/mcp.ts",
+        "src/action/atoms.ts",
+        "src/action/harness.ts",
+        "src/action/agreement.ts"
       ],
       "rules": {
         "no-restricted-globals": [
