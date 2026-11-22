@@ -102,8 +102,11 @@ both directions; a person typing is the exception.
 
 What reaches the listener from outside is decoded once, where it enters, into the
 shape the listener uses. These rules say what happens when it does not decode. A
-log line or an error about it names the field and what was expected, never a value
-from the input (R6).
+log line or an error about it names the field by its path and says what was
+expected. It shows no value from the input (R6), with two exceptions that hold no
+text: a path through one of the state file's maps shows `[key]` in place of the
+key, and a message R21 skips is named by its `ts` when that decodes, which is
+digits and a dot.
 
 - **R19. A state file that does not decode stops the listener.** On start the
   listener reads its state file. A file that is not JSON, has a version other than
@@ -129,6 +132,13 @@ from the input (R6).
   sender name falls back to the user id, and a thread parent or link is left out.
   A catch-up read that keeps failing this way keeps the listener from going live,
   so new messages wait until Slack's answer decodes, as with any failing catch-up.
+  Within a history or replies page whose answer decodes as a whole (it is ok and
+  holds a list of messages), one message that does not decode is skipped: it is
+  logged with its `ts`, when that decodes, its field and what was expected, and
+  not delivered. The rest of the page is read, so catch-up ends and the listener
+  goes live. Each later catch-up that reads the message skips it again. A thread
+  parent read alone for its quote is not a page; one that does not decode is left
+  out, as above.
 - **R22. A line from the session that does not decode is answered with the JSON-RPC
   error.** A line that is not JSON gets a parse error (-32700) with a null id. One
   that is not a JSON-RPC 2.0 request (no method, a method or id of the wrong type, a
@@ -172,8 +182,9 @@ posting stays off until `posting: true` is set in the configuration.
   instance was disconnected or stopped. Catch-up cannot tell it from a real edit and
   delivers it once as `kind=edit`. Received live, it is dropped (R5).
 - A message whose Socket Mode event does not decode (R20). It is acknowledged and not
-  delivered live; a catch-up that reads it from Slack's history in a shape that
-  decodes still delivers it.
+  delivered. A later catch-up recovers it only if a reconnect or restart comes
+  within the catch-up margin, about 10 minutes after the message, and the message
+  then decodes from Slack's history. Otherwise it is not delivered.
 - Messages Slack pushes more than 3 seconds apart in reverse order of their `ts`. The
   tool holds each live message for 3 seconds and orders what it holds (R4); a wider
   reordering by Slack can reach the session out of order.

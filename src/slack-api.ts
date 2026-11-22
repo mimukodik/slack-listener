@@ -3,7 +3,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientError } from "effect/http";
 
 import { describeIssue } from "./decode.ts";
-import { SlackMessageSchema, type SlackMessage } from "./slack.ts";
+import { SlackMessageSchema, SlackTs, type SlackMessage } from "./slack.ts";
 
 export class SlackApiError extends Data.TaggedError("SlackApiError")<{
   method: string;
@@ -28,6 +28,16 @@ const Messages = Schema.Struct({
     Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) }),
   ),
 });
+// A catch-up page: its messages are decoded one by one, so one that does
+// not decode is skipped instead of failing the page (R21).
+const Page = Schema.Struct({
+  messages: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) }),
+  ),
+});
+const decodeMessage = Schema.decodeUnknownResult(SlackMessageSchema);
+const decodeTs = Schema.decodeUnknownOption(Schema.Struct({ ts: SlackTs }));
 const Url = Schema.Struct({ url: Schema.optionalKey(Schema.String) });
 const UserInfo = Schema.Struct({
   user: Schema.optionalKey(
@@ -41,6 +51,14 @@ const UserInfo = Schema.Struct({
   ),
 });
 const Empty = Schema.Struct({});
+
+// What a catch-up read gives: the messages that decode, and one line for
+// each that did not, naming its ts when that decodes and its field, never
+// a value (R21).
+export interface CatchUpPage {
+  readonly messages: SlackMessage[];
+  readonly skipped: string[];
+}
 
 // The Slack Web API over Effect's HttpClient: production provides a client on
 // the real fetch, the simulator one on its fake (world-through-services).
@@ -143,12 +161,12 @@ export class SlackApi {
   private paged(
     method: string,
     params: Record<string, string>,
-  ): Effect.Effect<SlackMessage[], SlackApiError> {
+  ): Effect.Effect<CatchUpPage, SlackApiError> {
     const page = (
       cursor: string,
-      collected: SlackMessage[],
+      collected: CatchUpPage,
       count: number,
-    ): Effect.Effect<SlackMessage[], SlackApiError> => {
+    ): Effect.Effect<CatchUpPage, SlackApiError> => {
       if (count >= 100) {
         return Effect.fail(
           new SlackApiError({ method, reason: "more than 100 pages" }),
@@ -161,22 +179,22 @@ export class SlackApi {
           limit: "200",
           ...(cursor === "" ? {} : { cursor }),
         },
-        Messages,
+        Page,
       ).pipe(
         Effect.flatMap((body) => {
-          const all = [...collected, ...(body.messages ?? [])];
+          const all = readPage(method, body.messages ?? [], collected);
           const next = body.response_metadata?.next_cursor ?? "";
           return next === "" ? Effect.succeed(all) : page(next, all, count + 1);
         }),
       );
     };
-    return page("", [], 0);
+    return page("", { messages: [], skipped: [] }, 0);
   }
 
   history(
     channel: string,
     oldest: string,
-  ): Effect.Effect<SlackMessage[], SlackApiError> {
+  ): Effect.Effect<CatchUpPage, SlackApiError> {
     return this.paged("conversations.history", {
       channel,
       oldest,
@@ -188,7 +206,7 @@ export class SlackApi {
     channel: string,
     ts: string,
     oldest: string,
-  ): Effect.Effect<SlackMessage[], SlackApiError> {
+  ): Effect.Effect<CatchUpPage, SlackApiError> {
     return this.paged("conversations.replies", {
       channel,
       ts,
@@ -280,4 +298,27 @@ export class SlackApi {
       Empty,
     ).pipe(Effect.asVoid);
   }
+}
+
+// The page's messages added to what was read before it: each one is decoded
+// alone, and one that does not decode is left out with a line saying so.
+function readPage(
+  method: string,
+  messages: readonly unknown[],
+  collected: CatchUpPage,
+): CatchUpPage {
+  const read = [...collected.messages];
+  const skipped = [...collected.skipped];
+  for (const raw of messages) {
+    const message = decodeMessage(raw);
+    if (message._tag === "Success") {
+      read.push(message.success);
+      continue;
+    }
+    const ts = decodeTs(raw);
+    skipped.push(
+      `${ts._tag === "Some" ? `message ${ts.value.ts}` : "a message"} in ${method} that ${describeIssue(message.failure)}`,
+    );
+  }
+  return { messages: read, skipped };
 }

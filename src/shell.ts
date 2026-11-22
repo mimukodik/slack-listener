@@ -51,7 +51,7 @@ import {
 } from "./format.ts";
 import type { Log } from "./log.ts";
 import type { ChannelServer } from "./mcp.ts";
-import { redact, type SlackApi } from "./slack-api.ts";
+import { redact, type CatchUpPage, type SlackApi } from "./slack-api.ts";
 import {
   msToTs,
   SlackMessageSchema,
@@ -111,7 +111,7 @@ export function readSaved(
     const decoded = decodeSavedFile(json);
     if (decoded._tag === "Failure")
       return yield* new StateFileError({
-        reason: `${path} ${describeIssue(decoded.failure)}`,
+        reason: `${path} ${describeIssue(decoded.failure, savedMaps)}`,
       });
     const saved: Saved = decoded.success;
     return saved;
@@ -243,6 +243,8 @@ const SavedFile = Schema.Struct({
 });
 
 const decodeSavedFile = Schema.decodeUnknownResult(SavedFile);
+// The state file's maps, whose keys an error does not show (R19).
+const savedMaps = ["claimed", "reacted", "handled", "answered", "marked"];
 
 // R8: the wait before each try of a run starts at 1 second and doubles, up
 // to maxBackoffMs. The core says which run a failed try belongs to and when a
@@ -571,24 +573,35 @@ export function runShell(
 
       const fetchInto = (
         catchUpId: number,
-        program: Effect.Effect<
-          SlackMessage[],
-          { reason: string; method: string }
-        >,
+        program: Effect.Effect<CatchUpPage, { reason: string; method: string }>,
         toEvent: (messages: SlackMessage[]) => CoreEvent,
       ): Effect.Effect<void> =>
         FiberSet.run(
           tasks,
           program.pipe(
             Effect.match({
-              onFailure: (error): CoreEvent => ({
-                type: "fetch_failed",
-                catchUpId,
-                reason: `${error.method}: ${error.reason}`,
+              onFailure: (error) => ({
+                event: {
+                  type: "fetch_failed",
+                  catchUpId,
+                  reason: `${error.method}: ${error.reason}`,
+                } satisfies CoreEvent,
+                skipped: [],
               }),
-              onSuccess: toEvent,
+              onSuccess: (page) => ({
+                event: toEvent(page.messages),
+                skipped: page.skipped,
+              }),
             }),
-            Effect.flatMap(dispatch),
+            // R21: a message the page held that does not decode is logged
+            // and left out; the rest of the read goes on to the core.
+            Effect.flatMap(({ event, skipped }) =>
+              skipped.length === 0
+                ? dispatch(event)
+                : Effect.forEach(skipped, (line) =>
+                    log(`catch-up skipped ${line}`),
+                  ).pipe(Effect.andThen(dispatch(event))),
+            ),
           ),
         ).pipe(Effect.asVoid);
 

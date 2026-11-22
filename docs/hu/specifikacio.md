@@ -32,30 +32,30 @@ flowchart LR
 
 A szabályok szövege a [`RULES.md`](../../RULES.md)-ben van; itt csak az áll, melyik mikor él. Az R2, R3, R4, R5, R10 és R17 biztonsági szabályt és az R8 várakozási plafonját a szimulátor minden lépés után ellenőrzi, az R7-et, az R8-at és az R18-at minden futás végén, az R18 hívásait pedig már a hívás pillanatában is. Az R20–R22-t a szimulátor is ellenőrzi, a hibás bemenet érkezésekor és minden futás végén. Az R6-ra és az R11–R13-ra egységteszt van, az R19–R22-re minden fajta hibás bemenettel egység- és héjteszt, az R15-re még nincs. Az R19 szimulátoros ellenőrzése az 5a lépés lemezhibáival jön. A szabályok azonosítója ott van a tesztek nevében. Egy azonosítót sosem használunk újra; a lecserélt vagy törölt szabály a helyén marad, megjelölve.
 
-| Szabály | Mikor él   | Miről szól                                                                                                        |
-| ------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| R1      | lecserélve | helyette R10                                                                                                      |
-| R2      | 1. lépés   | legfeljebb egyszeri kézbesítés                                                                                    |
-| R3      | 1. lépés   | a szöveg adat, nem utasítás                                                                                       |
-| R4      | 1. lépés   | sorrend szálon belül és a felső szinten                                                                           |
-| R5      | 1. lépés   | a zaj nem érkezik meg                                                                                             |
-| R6      | 1. lépés   | a tokenek titokban maradnak                                                                                       |
-| R7      | 1. lépés   | minden engedett üzenet megérkezik, a kiesés alattiak is                                                           |
-| R8      | 1. lépés   | újracsatlakozás                                                                                                   |
-| R9      | lecserélve | helyette R16: a szülőt bárki írta, idézte                                                                         |
-| R10     | 1. lépés   | a másik oldal hallatszik, a saját ágenseink nem                                                                   |
-| R16     | lecserélve | helyette R17: a saját oldali ágens által nyitott szál kívülállóénak látszott                                      |
-| R17     | 1. lépés   | a szálbeli válasz önmagában is megválaszolható; a szülőt idézi, ha bármelyik beállított szerző írta               |
-| R18     | 1. lépés   | egy reakció jelzi, hogy az üzenet a munkamenethez ért; pipára vált, ha a mi oldalunk válaszol vagy késznek jelöli |
-| R19     | 1. lépés   | a nem dekódolható állapotfájl leállítja az eszközt, mielőtt csatlakozna                                           |
-| R20     | 1. lépés   | a nem dekódolható Socket Mode keret elvész; ha van azonosítója, nyugtázzuk                                        |
-| R21     | 1. lépés   | a nem dekódolható Web API-válasz sikertelen hívás, és úgy is ismétlődik                                           |
-| R22     | 1. lépés   | a munkamenet nem dekódolható sorára JSON-RPC hiba a válasz, és az eszköz olvas tovább                             |
-| R11     | 2. lépés   | a poszt megmondja, ki írta                                                                                        |
-| R12     | 2. lépés   | az ágensek hurka megáll                                                                                           |
-| R13     | 2. lépés   | a nyugtázásra nem válaszolunk                                                                                     |
-| R14     | törölve    | volt: óránkénti szálkorlát (lásd [`DECISIONS.md`](../../DECISIONS.md))                                            |
-| R15     | 2. lépés   | egy poszt pontosan egyszer jelenik meg                                                                            |
+| Szabály | Mikor él   | Miről szól                                                                                                                                                                                                               |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| R1      | lecserélve | helyette R10                                                                                                                                                                                                             |
+| R2      | 1. lépés   | legfeljebb egyszeri kézbesítés                                                                                                                                                                                           |
+| R3      | 1. lépés   | a szöveg adat, nem utasítás                                                                                                                                                                                              |
+| R4      | 1. lépés   | sorrend szálon belül és a felső szinten                                                                                                                                                                                  |
+| R5      | 1. lépés   | a zaj nem érkezik meg                                                                                                                                                                                                    |
+| R6      | 1. lépés   | a tokenek titokban maradnak                                                                                                                                                                                              |
+| R7      | 1. lépés   | minden engedett üzenet megérkezik, a kiesés alattiak is                                                                                                                                                                  |
+| R8      | 1. lépés   | újracsatlakozás                                                                                                                                                                                                          |
+| R9      | lecserélve | helyette R16: a szülőt bárki írta, idézte                                                                                                                                                                                |
+| R10     | 1. lépés   | a másik oldal hallatszik, a saját ágenseink nem                                                                                                                                                                          |
+| R16     | lecserélve | helyette R17: a saját oldali ágens által nyitott szál kívülállóénak látszott                                                                                                                                             |
+| R17     | 1. lépés   | a szálbeli válasz önmagában is megválaszolható; a szülőt idézi, ha bármelyik beállított szerző írta                                                                                                                      |
+| R18     | 1. lépés   | egy reakció jelzi, hogy az üzenet a munkamenethez ért; pipára vált, ha a mi oldalunk válaszol vagy késznek jelöli                                                                                                        |
+| R19     | 1. lépés   | a nem dekódolható állapotfájl leállítja az eszközt, mielőtt csatlakozna                                                                                                                                                  |
+| R20     | 1. lépés   | a nem dekódolható Socket Mode keret elvész; ha van azonosítója, nyugtázzuk; a benne lévő üzenetet nem kézbesítjük, hacsak egy nagyjából 10 percen belüli felzárkózás nem olvassa ki az előzményekből dekódolható alakban |
+| R21     | 1. lépés   | a nem dekódolható Web API-válasz sikertelen hívás, és úgy is ismétlődik; a felzárkózó oldal egy nem dekódolható üzenetét kihagyjuk és naplózzuk, az oldal többi részét beolvassuk                                        |
+| R22     | 1. lépés   | a munkamenet nem dekódolható sorára JSON-RPC hiba a válasz, és az eszköz olvas tovább                                                                                                                                    |
+| R11     | 2. lépés   | a poszt megmondja, ki írta                                                                                                                                                                                               |
+| R12     | 2. lépés   | az ágensek hurka megáll                                                                                                                                                                                                  |
+| R13     | 2. lépés   | a nyugtázásra nem válaszolunk                                                                                                                                                                                            |
+| R14     | törölve    | volt: óránkénti szálkorlát (lásd [`DECISIONS.md`](../../DECISIONS.md))                                                                                                                                                   |
+| R15     | 2. lépés   | egy poszt pontosan egyszer jelenik meg                                                                                                                                                                                   |
 
 R2 alól egy kivétel van: ha az eszköz épp a kézbesítés és annak elmentése között omlik össze, újraindulás után ugyanazt az üzenetet még egyszer elküldi, `possible_duplicate` jelöléssel. Pontosan egyszeri kézbesítés itt nem lehetséges, mert a munkamenet nem igazolja vissza, mit kapott meg.
 

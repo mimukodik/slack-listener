@@ -529,6 +529,17 @@ describe("R19: the state file as read", () => {
     for (const [field, file] of cases)
       expect(await refused(JSON.stringify(file))).toContain(field);
   });
+
+  // A map's key is text from the file, so the error shows the map's name
+  // and a placeholder in its place, never the key.
+  it("names a map whose entry does not decode without its key", async () => {
+    for (const field of ["claimed", "reacted", "handled", "answered", "marked"])
+      expect(
+        await refused(
+          JSON.stringify({ ...written, [field]: { "quoted words": "x" } }),
+        ),
+      ).toContain(`at ${field}.[key]:`);
+  });
 });
 
 describe("R6: tokens stay secret", () => {
@@ -973,6 +984,43 @@ describe("the shell as an Effect program", () => {
 
   // Slack closes the socket after a disconnect frame whatever its reason
   // says, so the listener reconnects as it did before decoding.
+  // Slack's timestamps are digits, a dot and digits; anything else is not a
+  // ts, wherever it sits in an event.
+  it("R20: a message whose ts is not a Slack timestamp does not decode", () => {
+    const event = (fields: object) =>
+      JSON.stringify(
+        envelope("ETS", {
+          type: "message",
+          user: "U0OTHER01",
+          text: "quoted words",
+          ts: "1795099386.438339",
+          ...fields,
+        }),
+      );
+    expect(decodeFrame(event({})).kind).toBe("envelope");
+    expect(decodeFrame(event({}))).toMatchObject({ undecoded: null });
+    for (const [field, fields] of [
+      ["ts", { ts: "1795099386" }],
+      ["ts", { ts: "1795099386.438339.1" }],
+      ["ts", { ts: "quoted words" }],
+      ["ts", { ts: " 1795099386.438339" }],
+      ["ts", { ts: "1795099386.438339\n" }],
+      ["thread_ts", { thread_ts: "1795099386." }],
+      ["latest_reply", { latest_reply: ".438339" }],
+      ["edited.ts", { edited: { user: "U0OTHER01", ts: "1795099386,438339" } }],
+    ] as const) {
+      const frame = decodeFrame(event(fields));
+      expect(frame, JSON.stringify(fields)).toMatchObject({
+        kind: "envelope",
+        message: null,
+      });
+      expect(
+        frame.kind === "envelope" ? frame.undecoded : null,
+        JSON.stringify(fields),
+      ).toContain(`at payload.event.${field}: Expected a string matching`);
+    }
+  });
+
   it("R20: a disconnect frame reconnects whatever its reason holds", () => {
     expect(
       decodeFrame('{"type":"disconnect","reason":"refresh_requested"}'),
@@ -1078,7 +1126,6 @@ describe("R21: a Web API answer that does not decode", () => {
       ['{"ok":"quoted words"}', history, "ok"],
       ['{"ok":false,"error":5}', history, "error"],
       ['{"ok":true,"messages":"quoted words"}', history, "messages"],
-      ['{"ok":true,"messages":[{"text":"quoted words"}]}', history, "ts"],
       [
         '{"ok":true,"messages":[],"response_metadata":{"next_cursor":5}}',
         history,
@@ -1131,15 +1178,18 @@ describe("R21: a Web API answer that does not decode", () => {
       }),
       history,
     );
-    expect(result._tag === "Success" ? result.success : result).toEqual([
-      {
-        type: "message",
-        user: "U0OTHER01",
-        text: "hello",
-        ts: "1795099386.438339",
-        reply_count: 2,
-      },
-    ] as never);
+    expect(result._tag === "Success" ? result.success : result).toEqual({
+      messages: [
+        {
+          type: "message",
+          user: "U0OTHER01",
+          text: "hello",
+          ts: "1795099386.438339",
+          reply_count: 2,
+        },
+      ],
+      skipped: [],
+    } as never);
   });
 });
 
@@ -1337,7 +1387,7 @@ describe("retries on a virtual clock", () => {
       (method) => {
         if (method === "conversations.history") reads += 1;
         if (method === "conversations.history" && reads === 1)
-          return { ok: true, messages: [{ text: "quoted words" }] };
+          return { ok: true, messages: "quoted words" };
         if (method === "conversations.history" && reads === 2) return null;
         return slackBodies[method] ?? { ok: false };
       },
@@ -1353,6 +1403,128 @@ describe("retries on a virtual clock", () => {
       3,
     );
     expect(stderr).not.toContain("quoted words");
+  });
+
+  // R21: one message in a catch-up page that does not decode is skipped and
+  // logged; the rest of the page is read, catch-up ends and the listener
+  // goes live. The reviewer's probe: a bot message with bot_id null.
+  it("R21: a catch-up page skips a message that does not decode and reads the rest", async () => {
+    const goodTs = msToTs(simStartMs + 1);
+    const badTs = msToTs(simStartMs + 2);
+    const shell = virtualShell(
+      1,
+      (method) =>
+        method === "conversations.history"
+          ? {
+              ok: true,
+              messages: [
+                { type: "message", text: "quoted words" },
+                {
+                  type: "message",
+                  user: "U0OTHER01",
+                  text: "quoted words",
+                  ts: badTs,
+                  bot_id: null,
+                },
+                {
+                  type: "message",
+                  user: "U0OTHER01",
+                  text: "read from history",
+                  ts: goodTs,
+                },
+              ],
+            }
+          : (slackBodies[method] ?? { ok: false }),
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+        runtime.at(5000, () =>
+          socket.frame(
+            envelope("ELIVE", {
+              type: "message",
+              channel: "C0WATCH001",
+              user: "U0OTHER01",
+              text: "live after catch-up",
+              ts: msToTs(runtime.nowMs),
+            }),
+          ),
+        );
+      },
+    );
+    await shell.run(60_000);
+    expect(
+      shell.calls.filter((call) => call.endsWith(" conversations.history")),
+    ).toHaveLength(1);
+    const delivered = shell.stdio.lines
+      .filter((line) => line.method === "notifications/claude/channel")
+      .map((line) => JSON.stringify(line));
+    expect(delivered).toHaveLength(2);
+    expect(delivered[0]).toContain("read from history");
+    expect(delivered[1]).toContain("live after catch-up");
+    const stderr = shell.stdio.stderr.join("");
+    expect(stderr).toContain(
+      `catch-up skipped a message in conversations.history that does not decode at ts:`,
+    );
+    expect(stderr).toContain(
+      `catch-up skipped message ${badTs} in conversations.history that does not decode at bot_id:`,
+    );
+    expect(stderr).not.toContain("quoted words");
+  });
+
+  it("R21: a thread's replies page skips a reply that does not decode and reads the rest", async () => {
+    const parentTs = msToTs(simStartMs + 1);
+    const badTs = msToTs(simStartMs + 2);
+    const goodTs = msToTs(simStartMs + 3);
+    const parent = {
+      type: "message",
+      user: "U0OTHER01",
+      text: "a parent",
+      ts: parentTs,
+      thread_ts: parentTs,
+      reply_count: 2,
+      latest_reply: goodTs,
+    };
+    const shell = virtualShell(
+      1,
+      (method) =>
+        method === "conversations.history"
+          ? { ok: true, messages: [parent] }
+          : method === "conversations.replies"
+            ? {
+                ok: true,
+                messages: [
+                  parent,
+                  {
+                    type: "message",
+                    user: "U0OTHER01",
+                    text: 5,
+                    ts: badTs,
+                    thread_ts: parentTs,
+                  },
+                  {
+                    type: "message",
+                    user: "U0OTHER01",
+                    text: "a good reply",
+                    ts: goodTs,
+                    thread_ts: parentTs,
+                  },
+                ],
+              }
+            : (slackBodies[method] ?? { ok: false }),
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+      },
+    );
+    await shell.run(60_000);
+    const delivered = shell.stdio.lines
+      .filter((line) => line.method === "notifications/claude/channel")
+      .map((line) => JSON.stringify(line));
+    expect(delivered.some((line) => line.includes("a good reply"))).toBe(true);
+    expect(delivered.some((line) => line.includes(badTs))).toBe(false);
+    expect(shell.stdio.stderr.join("")).toContain(
+      `catch-up skipped message ${badTs} in conversations.replies that does not decode at text:`,
+    );
   });
 
   // R21: an open whose answer does not decode is a failed open (R8).
