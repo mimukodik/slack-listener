@@ -574,7 +574,7 @@ export function runShell(
       const fetchInto = (
         catchUpId: number,
         program: Effect.Effect<CatchUpPage, { reason: string; method: string }>,
-        toEvent: (messages: SlackMessage[]) => CoreEvent,
+        toEvent: (page: CatchUpPage) => CoreEvent,
       ): Effect.Effect<void> =>
         FiberSet.run(
           tasks,
@@ -589,7 +589,7 @@ export function runShell(
                 skipped: [],
               }),
               onSuccess: (page) => ({
-                event: toEvent(page.messages),
+                event: toEvent(page),
                 skipped: page.skipped,
               }),
             }),
@@ -746,10 +746,11 @@ export function runShell(
             return fetchInto(
               effect.catchUpId,
               api.history(config.core.channel, msToTs(effect.oldestMs)),
-              (messages) => ({
+              ({ messages, threads }) => ({
                 type: "history_loaded",
                 catchUpId: effect.catchUpId,
                 messages,
+                threads,
               }),
             );
           case "fetch_replies":
@@ -760,7 +761,8 @@ export function runShell(
                 effect.threadTs,
                 msToTs(effect.oldestMs),
               ),
-              (messages) => ({
+              // A reply heads no thread, so a skipped one gives none.
+              ({ messages }) => ({
                 type: "replies_loaded",
                 catchUpId: effect.catchUpId,
                 threadTs: effect.threadTs,

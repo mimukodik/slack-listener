@@ -254,6 +254,7 @@ export class World {
     malformedAnswers: 0,
     malformedLines: 0,
     unreadableInCatchUp: 0,
+    repliesUnderUnreadable: 0,
   };
   private readonly checker: SafetyChecker;
   private readonly config: ListenerConfig = {
@@ -314,8 +315,12 @@ export class World {
   // R21: messages in the watched channel's history that do not decode, by
   // ts, newest last. Each also went out live as an envelope that does not
   // decode if the listener was connected; neither may ever be delivered.
-  private readonly unreadable: { ts: string; event: object }[] = [];
-  private readonly unreadableEvents = new Set<object>();
+  // canHead: whether its ts, reply_count and latest_reply decode, so a
+  // catch-up can still read its thread; only such a message gets replies.
+  private readonly unreadable = new Map<
+    string,
+    { event: object; canHead: boolean }
+  >();
   // R22: the JSON-RPC error each bad session line awaits, by its id, and in
   // order for the lines answered with a null id.
   private readonly badLines = new Map<string, number>();
@@ -680,6 +685,22 @@ export class World {
       case "conversations.replies": {
         this.coverage.repliesFetched += 1;
         const ts = params.get("ts") ?? "";
+        // R21: a thread under a parent that does not decode: Slack answers
+        // with that parent first, as it does with any parent.
+        if (this.unreadable.has(ts))
+          return params.get("limit") === "1"
+            ? { ok: true, messages: [this.unreadableEvent(ts)] }
+            : this.page(
+                [
+                  this.unreadableEvent(ts),
+                  ...this.slack.replies(
+                    params.get("channel") ?? "",
+                    ts,
+                    params.get("oldest") ?? "0",
+                  ),
+                ],
+                params,
+              );
         if (params.get("limit") === "1") {
           const parent = this.slack.messages.get(ts);
           if (
@@ -791,7 +812,7 @@ export class World {
     if (
       params.get("channel") !== watchedChannel ||
       params.has("cursor") ||
-      this.unreadable.length === 0
+      this.unreadable.size === 0
     )
       return messages;
     const oldest = params.get("oldest") ?? "0";
@@ -799,8 +820,9 @@ export class World {
       ts: item.ts,
       item,
     }));
-    for (const { ts, event } of this.unreadable)
-      if (compareTs(ts, oldest) >= 0) entries.push({ ts, item: event });
+    for (const ts of this.unreadable.keys())
+      if (compareTs(ts, oldest) >= 0)
+        entries.push({ ts, item: this.unreadableEvent(ts) });
     return entries
       .sort((a, b) => compareTs(b.ts, a.ts))
       .map((entry) => entry.item);
@@ -814,7 +836,14 @@ export class World {
     const next = all.length > size ? `cursor-${++this.cursorCounter}` : "";
     if (next !== "") this.pages.set(next, all.slice(size));
     const served = all.slice(0, size);
-    if (served.some((item) => this.unreadableEvents.has(item)))
+    if (
+      served.some(
+        (item) =>
+          "ts" in item &&
+          typeof item.ts === "string" &&
+          this.unreadable.has(item.ts),
+      )
+    )
       this.coverage.unreadableInCatchUp += 1;
     return {
       ok: true,
@@ -909,6 +938,8 @@ export class World {
     if (delivery.isReply) this.checkParent(delivery, meta);
     if (delivery.kind === "edit") this.coverage.editsDelivered += 1;
     if (delivery.isReply) this.coverage.threadRepliesDelivered += 1;
+    if (delivery.isReply && this.unreadable.has(delivery.threadTs))
+      this.coverage.repliesUnderUnreadable += 1;
     if (this.slack.messages.get(delivery.ts)?.broadcast === true)
       this.coverage.broadcastsDelivered += 1;
     if (
@@ -1169,9 +1200,6 @@ export class World {
         },
       });
   }
-  // R20: an envelope whose message event does not decode. Its ts is never
-  // stored at Slack, so no catch-up reads it, and it must never be handed
-  // to the session; the listener acknowledges it once per send.
   // R21: a message Slack keeps in the watched channel's history that the
   // listener cannot read; the reviewer's probe was a bot message whose
   // bot_id is null. A catch-up page holding it must still be read, its
@@ -1186,18 +1214,36 @@ export class World {
       text: "does not decode",
       ts,
     };
-    const event = this.choices.pick<object>([
-      { ...base, bot_id: null },
-      { ...base, text: 5 },
-      { ...base, reply_count: "2" },
-      { ...base, edited: { user: people.other } },
+    const [event, canHead] = this.choices.pick<[object, boolean]>([
+      [{ ...base, bot_id: null }, true],
+      [{ ...base, text: 5 }, true],
+      [{ ...base, reply_count: "2" }, false],
+      [{ ...base, edited: { user: people.other } }, true],
     ]);
-    this.unreadable.push({ ts, event });
-    this.unreadableEvents.add(event);
+    this.unreadable.set(ts, { event, canHead });
     const socket = this.socket;
     if (this.connected && this.running && socket !== null)
       this.sendMalformed(socket, ts, event);
   }
+  // The message as Slack's history shows it: with its thread's count and
+  // latest reply once it has replies.
+  private unreadableEvent(ts: string): object {
+    const entry = this.unreadable.get(ts);
+    assert(entry !== undefined, `${ts} is not an unreadable message`);
+    const replies = this.slack.replies(watchedChannel, ts, "0");
+    const latest = replies.at(-1);
+    return latest === undefined
+      ? entry.event
+      : {
+          ...entry.event,
+          thread_ts: ts,
+          reply_count: replies.length,
+          latest_reply: latest.ts,
+        };
+  }
+  // R20: an envelope whose message event does not decode. Its ts is never
+  // stored at Slack, so no catch-up reads it, and it must never be handed
+  // to the session; the listener acknowledges it once per send.
   private emitMalformed(socket: WorldSocket): void {
     const ts = this.slack.nextTs(this.now);
     this.malformedTs.add(ts);
@@ -1345,16 +1391,25 @@ export class World {
   }
 
   private reply(): void {
+    // R21 with R7: a reply in the thread of a parent that does not decode.
+    const unreadableParents = [...this.unreadable]
+      .filter(([, entry]) => entry.canHead)
+      .map(([ts]) => ts);
+    const underUnreadable =
+      this.faultsOn && unreadableParents.length > 0 && this.choices.chance(20)
+        ? this.choices.pick(unreadableParents)
+        : null;
     const parents = this.watchedMessages((m) => !this.slack.inThread(m));
-    if (parents.length === 0) return this.postTopLevel();
-    const parent = this.choices.pick(parents);
+    if (parents.length === 0 && underUnreadable === null)
+      return this.postTopLevel();
+    const parentTs = underUnreadable ?? this.choices.pick(parents).ts;
     const label = this.randomAuthor();
     const broadcast = this.choices.chance(15);
     this.store({
       channel: watchedChannel,
       author: authors[label],
       ts: this.slack.nextTs(this.now),
-      threadTs: parent.ts,
+      threadTs: parentTs,
       broadcast,
       text: this.text(`reply ${this.steps} by ${label}`),
       editedTs: undefined,

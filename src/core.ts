@@ -1,4 +1,10 @@
-import { compareTs, msToTs, tsToMs, type SlackMessage } from "./slack.ts";
+import {
+  compareTs,
+  msToTs,
+  tsToMs,
+  type SlackMessage,
+  type ThreadStub,
+} from "./slack.ts";
 
 export interface CoreConfig {
   channel: string;
@@ -90,7 +96,15 @@ export type CoreEvent =
       envelopeId: string;
       message: SlackMessage | null;
     }
-  | { type: "history_loaded"; catchUpId: number; messages: SlackMessage[] }
+  | {
+      type: "history_loaded";
+      catchUpId: number;
+      messages: SlackMessage[];
+      // R21: thread parents in the page that did not decode. Each is read
+      // for its replies, which may have come in the gap, and never
+      // delivered itself.
+      threads?: readonly ThreadStub[];
+    }
   | {
       type: "replies_loaded";
       catchUpId: number;
@@ -778,19 +792,23 @@ function reduce(
       const lowerBound = catchUpLowerBound(state, now);
       const items = [...catchUp.items];
       let pending = catchUp.pending - 1;
+      const threads: ThreadStub[] = [...(event.threads ?? [])];
       for (const message of event.messages) {
         const withChannel = { ...message, channel: state.config.channel };
         if (inWindow(withChannel, lowerBound)) items.push(withChannel);
-        const latest = message.latest_reply;
+        threads.push(message);
+      }
+      for (const thread of threads) {
+        const latest = thread.latest_reply;
         if (
           latest !== undefined &&
-          (message.reply_count ?? 0) > 0 &&
+          (thread.reply_count ?? 0) > 0 &&
           tsToMs(latest) >= lowerBound
         ) {
           effects.push({
             type: "fetch_replies",
             catchUpId: catchUp.id,
-            threadTs: message.ts,
+            threadTs: thread.ts,
             oldestMs: lowerBound,
           });
           pending += 1;

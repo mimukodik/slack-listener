@@ -3,7 +3,12 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientError } from "effect/http";
 
 import { describeIssue } from "./decode.ts";
-import { SlackMessageSchema, SlackTs, type SlackMessage } from "./slack.ts";
+import {
+  SlackMessageSchema,
+  SlackTs,
+  type SlackMessage,
+  type ThreadStub,
+} from "./slack.ts";
 
 export class SlackApiError extends Data.TaggedError("SlackApiError")<{
   method: string;
@@ -38,6 +43,15 @@ const Page = Schema.Struct({
 });
 const decodeMessage = Schema.decodeUnknownResult(SlackMessageSchema);
 const decodeTs = Schema.decodeUnknownOption(Schema.Struct({ ts: SlackTs }));
+// What a skipped message still gives a catch-up when it decodes: the thread
+// it may head, so the thread's replies are still read (R21, R7).
+const decodeThread = Schema.decodeUnknownOption(
+  Schema.Struct({
+    ts: SlackTs,
+    reply_count: Schema.optionalKey(Schema.Finite),
+    latest_reply: Schema.optionalKey(SlackTs),
+  }),
+);
 const Url = Schema.Struct({ url: Schema.optionalKey(Schema.String) });
 const UserInfo = Schema.Struct({
   user: Schema.optionalKey(
@@ -54,9 +68,11 @@ const Empty = Schema.Struct({});
 
 // What a catch-up read gives: the messages that decode, and one line for
 // each that did not, naming its ts when that decodes and its field, never
-// a value (R21).
+// a value (R21). A skipped message that heads a thread still gives the
+// thread, so its replies are read.
 export interface CatchUpPage {
   readonly messages: SlackMessage[];
+  readonly threads: ThreadStub[];
   readonly skipped: string[];
 }
 
@@ -188,7 +204,7 @@ export class SlackApi {
         }),
       );
     };
-    return page("", { messages: [], skipped: [] }, 0);
+    return page("", { messages: [], threads: [], skipped: [] }, 0);
   }
 
   history(
@@ -300,14 +316,15 @@ export class SlackApi {
   }
 }
 
-// The page's messages added to what was read before it: each one is decoded
-// alone, and one that does not decode is left out with a line saying so.
+// The page's messages added to what was read: each is decoded alone; one that
+// does not is left out with a line saying so, and still gives its thread.
 function readPage(
   method: string,
   messages: readonly unknown[],
   collected: CatchUpPage,
 ): CatchUpPage {
   const read = [...collected.messages];
+  const threads = [...collected.threads];
   const skipped = [...collected.skipped];
   for (const raw of messages) {
     const message = decodeMessage(raw);
@@ -315,10 +332,13 @@ function readPage(
       read.push(message.success);
       continue;
     }
+    const thread = decodeThread(raw);
+    if (thread._tag === "Some" && (thread.value.reply_count ?? 0) > 0)
+      threads.push(thread.value);
     const ts = decodeTs(raw);
     skipped.push(
       `${ts._tag === "Some" ? `message ${ts.value.ts}` : "a message"} in ${method} that ${describeIssue(message.failure)}`,
     );
   }
-  return { messages: read, skipped };
+  return { messages: read, threads, skipped };
 }

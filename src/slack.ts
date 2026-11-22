@@ -17,6 +17,13 @@ export interface SlackMessage {
   previous_message?: SlackMessage;
 }
 
+// R21: what a catch-up needs of a thread parent that does not decode as a
+// message: where it is, and whether its thread has replies to read.
+export type ThreadStub = Pick<
+  SlackMessage,
+  "ts" | "reply_count" | "latest_reply"
+>;
+
 // A Slack timestamp: seconds, a dot and a fraction, as tsToMs reads it.
 export const SlackTs = Schema.String.check(Schema.isPattern(/^\d+\.\d+$/));
 

@@ -45,6 +45,7 @@ export interface Coverage {
   malformedAnswers: number;
   malformedLines: number;
   unreadableInCatchUp: number;
+  repliesUnderUnreadable: number;
 }
 
 export interface SimResult {

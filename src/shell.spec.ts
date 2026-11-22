@@ -1188,6 +1188,7 @@ describe("R21: a Web API answer that does not decode", () => {
           reply_count: 2,
         },
       ],
+      threads: [],
       skipped: [],
     } as never);
   });
@@ -1525,6 +1526,64 @@ describe("retries on a virtual clock", () => {
     expect(shell.stdio.stderr.join("")).toContain(
       `catch-up skipped message ${badTs} in conversations.replies that does not decode at text:`,
     );
+  });
+
+  // R21 with R7: a thread parent that does not decode is not delivered, but
+  // its thread is still read, so a reply posted in the gap is delivered. The
+  // reviewer's probe: a parent with bot_id null, one reply.
+  it("R21: a thread parent that does not decode still has its replies read and delivered", async () => {
+    const parentTs = msToTs(simStartMs + 1);
+    const replyTs = msToTs(simStartMs + 2);
+    const parent = {
+      type: "message",
+      user: "U0OTHER01",
+      text: "quoted words",
+      ts: parentTs,
+      bot_id: null,
+      thread_ts: parentTs,
+      reply_count: 1,
+      latest_reply: replyTs,
+    };
+    const shell = virtualShell(
+      1,
+      (method) =>
+        method === "conversations.history"
+          ? { ok: true, messages: [parent] }
+          : method === "conversations.replies"
+            ? {
+                ok: true,
+                messages: [
+                  parent,
+                  {
+                    type: "message",
+                    user: "U0OTHER01",
+                    text: "a reply under an unreadable parent",
+                    ts: replyTs,
+                    thread_ts: parentTs,
+                  },
+                ],
+              }
+            : (slackBodies[method] ?? { ok: false }),
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+      },
+    );
+    await shell.run(60_000);
+    expect(
+      shell.calls.filter((call) => call.endsWith(" conversations.replies")),
+    ).not.toHaveLength(0);
+    const delivered = shell.stdio.lines
+      .filter((line) => line.method === "notifications/claude/channel")
+      .map((line) => JSON.stringify(line));
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toContain("a reply under an unreadable parent");
+    expect(delivered[0]).toContain(replyTs);
+    const stderr = shell.stdio.stderr.join("");
+    expect(stderr).toContain(
+      `catch-up skipped message ${parentTs} in conversations.history that does not decode at bot_id:`,
+    );
+    expect(stderr).not.toContain("quoted words");
   });
 
   // R21: an open whose answer does not decode is a failed open (R8).
