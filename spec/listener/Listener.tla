@@ -312,7 +312,8 @@ R5 == \A j \in SIdx : (slog[j].k = "edit" /\ ~slog[j].dup) =>
 
 \* R4: within a thread, and among top-level messages, in ts order. A message
 \* whose live event did not decode (R20) and that a later catch-up finds may
-\* arrive after newer messages of its thread.
+\* arrive out of this order; the excuse here is narrower, covering only that
+\* message arriving after newer ones.
 R4 == \A i, j \in SIdx :
         (i < j /\ slog[i].k = "msg" /\ slog[j].k = "msg" /\ ~slog[j].dup
          /\ msg[slog[i].m].par = msg[slog[j].m].par

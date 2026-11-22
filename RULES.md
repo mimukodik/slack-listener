@@ -47,8 +47,7 @@ both directions; a person typing is the exception.
   In step 1 it never posts to Slack.
 - **R4. Order holds within a thread.** Two messages of one thread, and two top-level
   messages, are delivered in the order of their `ts`. A message whose live event did
-  not decode (R20) and that a later catch-up finds may arrive after newer messages of
-  its thread.
+  not decode (R20) and that a later catch-up finds may arrive out of this order.
 - **R5. Noise is not delivered.** Deletions, changes that leave the text the same
   (such as a parent's reply count), joins, leaves and topic changes are never
   delivered.
@@ -67,10 +66,11 @@ both directions; a person typing is the exception.
 
 - **R7. Every allowed message arrives.** Every message R10 allows, posted while the
   instance runs or while it was disconnected or stopped (up to 24 hours back), is
-  delivered once the instance is connected again and the session accepts writes.
-  This includes replies in threads whose first message is up to 7 days old.
-  After a disconnect, live messages wait until the next catch-up ends, and what a
-  catch-up has gathered survives the disconnect.
+  delivered once the instance is connected again and the session accepts writes. This
+  includes replies in threads whose first message is up to 7 days old. After a
+  disconnect, live messages wait until the next catch-up ends, and what a finished
+  catch-up has gathered survives the disconnect; what one cut short had read is read
+  again by the next.
 - **R8. The instance reconnects.** After any disconnect or failed connection attempt
   the instance tries again, with a wait that grows to at most 60 seconds, for as long
   as it runs.
@@ -96,13 +96,15 @@ both directions; a person typing is the exception.
   top-level message's thread starts at its own `ts`), or the session marks the
   message done, the listener replaces its reaction with a second one
   (`:heavy_check_mark:`, set in configuration): it adds the second, then removes the
-  first. A message handled before its delivery gets the second at once. The two must differ. Marking takes only the
-  message's `ts`; it changes nothing but the own reactions on that message and sends no
-  text. It never sets or removes anyone else's reaction. A failed reaction call never
-  delays or drops a delivery; it is retried a bounded number of times and then given
-  up. When adding the second is given up, the first stays, so a delivered message
-  always carries one of the two. A done mark is saved before the session's call is
-  answered, and the reaction queue is saved after each call. Reactions carry no text.
+  first. A message handled before its delivery gets the second at once. The two must
+  differ. Marking takes only the message's `ts`; it changes nothing but the own
+  reactions on that message and sends no text. It never sets or removes anyone else's
+  reaction. A failed reaction call never delays or drops a delivery; it is retried a
+  bounded number of times and then given up. When adding the second is given up, the
+  first stays. A delivered message carries neither only when adding its first
+  reaction was given up, or dropped because the reaction queue was full. A done mark
+  is saved before the session's call is answered, and the reaction queue is saved
+  before each call, so a restart repeats at most one call. Reactions carry no text.
 
 ## Malformed input, step 1
 
@@ -135,21 +137,21 @@ digits and a dot.
   not JSON, does not say whether it is ok, or holds a field the listener reads with
   the wrong type fails the call, exactly as an error from Slack does: connecting and
   catching up are tried again on R8's waits, a reaction call on R18's three tries; a
-  sender name falls back to the user id, and a thread parent or link is left out.
-  A catch-up read that keeps failing this way keeps the listener from going live,
-  so new messages wait until Slack's answer decodes, as with any failing catch-up.
+  sender name falls back to the user id, and a thread parent or link is left out. A
+  catch-up read that keeps failing this way keeps the listener from going live, so
+  new messages wait until Slack's answer decodes, as with any failing catch-up.
   Within a history or replies page whose answer decodes as a whole (it is ok and
   holds a list of messages), one message that does not decode is skipped: it is
-  logged with its `ts`, when that decodes, its field and what was expected, and
-  not delivered. The rest of the page is read, so catch-up ends and the listener
-  goes live. Each later catch-up that reads the message skips it again. A message
-  that decodes live but not in a catch-up's history is skipped there, and a resend of
-  its live event is dropped, so it is not delivered. A thread parent that does not
-  decode still has its replies read, as long as its `ts`, `reply_count` and
-  `latest_reply` decode; when one of them does not, replies posted in that thread
-  while the listener was away are not delivered unless also sent to the channel. A
-  thread parent read alone for its quote is not a page; one that does
-  not decode is left out, as above.
+  logged with its `ts`, when that decodes, its field and what was expected, and not
+  delivered. The rest of the page is read, so catch-up ends and the listener goes
+  live. Each later catch-up that reads the message skips it again. A message posted
+  before a catch-up started that decodes live but not in that catch-up's history is
+  skipped there, and its live event, whether resent or held across the reconnect, is
+  dropped, so it is not delivered. A thread parent that does not decode still has its
+  replies read, as long as its `ts`, `reply_count` and `latest_reply` decode; when
+  one of them does not, replies posted in that thread while the listener was away are
+  not delivered unless also sent to the channel. A thread parent read alone for its
+  quote is not a page; one that does not decode is left out, as above.
 - **R22. A line from the session that does not decode is answered with the JSON-RPC
   error.** A line that is not JSON gets a parse error (-32700) with a null id. One
   that is not a JSON-RPC 2.0 request (no method, a method or id of the wrong type, a

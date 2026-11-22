@@ -19,21 +19,21 @@ For one log: `steps.sh <cfg>` prints a counterexample's actions, and `trace.sh <
 
 **Listener.tla.** Messages are posted with ts 1..N, top-level or as a reply in an earlier top-level message's thread, by the other side (heard, R10) or by an own-side agent (never delivered).
 
-| Rules                   | Model                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slack                   | Slack pushes one envelope per post or edit while connected, FIFO, and may resend an unacked envelope (`MaxDup`). Top-level messages age: 0 (under 24 h), 1 (1 to 7 days), 2 (older). `Decodes`: a message reads as `ok`, `bad` or `badTs` in a history or replies page. `LiveBads`: its envelope payload does or does not decode                                              |
-| R20                     | each frame is acked once (`AckOnce`). A payload that does not decode is acked and dropped                                                                                                                                                                                                                                                                                     |
-| R7, R21 catch-up        | on connect, history pages of `PS` top-level messages, newest first, back 7 days, then each scheduled thread. A thread is scheduled when it has a reply above the cursor, or when its parent was skipped but its ts decodes. A message that does not decode in a page is skipped. A failed whole-page read is a retry, which is a stutter, so it is not modelled               |
-| live waits for catch-up | live messages are held. They are delivered only once the last catch-up's reads have ended, and none has started since; Connect, Disconnect and Crash clear that. What a catch-up gathered and did not deliver is kept across a disconnect and the next connect (R7). Delivery also waits until what Slack pushed has landed, which models the 3-second hold (R4 out of scope) |
-| R21 resend              | a live envelope of a message posted before the last catch-up started (`liveFrom`) is acked and dropped: that catch-up read it, or skipped it                                                                                                                                                                                                                                  |
-| R2                      | a delivery is three steps: save the intent, write to the session, save delivered plus cursor (`Margin` re-reads below the cursor). A crash restarts from the file, and a saved intent is delivered again, marked `possible_duplicate`                                                                                                                                         |
+| Rules                   | Model                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slack                   | Slack pushes one envelope per post or edit while connected, FIFO, and may resend an unacked envelope (`MaxDup`). Top-level messages age: 0 (under 24 h), 1 (1 to 7 days), 2 (older). `Decodes`: a message reads as `ok`, `bad` or `badTs` in a history or replies page. `LiveBads`: its envelope payload does or does not decode                                                                                                                                                                                                                                 |
+| R20                     | each frame is acked once (`AckOnce`). A payload that does not decode is acked and dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| R7, R21 catch-up        | on connect, history pages of `PS` top-level messages, newest first, back 7 days, then each scheduled thread. A thread is scheduled when it has a reply above the cursor, or when its parent was skipped but its ts decodes. A message that does not decode in a page is skipped. A failed whole-page read is a retry, which is a stutter, so it is not modelled                                                                                                                                                                                                  |
+| live waits for catch-up | live messages are held. They are delivered only once the last catch-up's reads have ended, and none has started since; Connect, Disconnect and Crash clear that. What a catch-up gathered and did not deliver is kept across a disconnect and the next connect, whether it finished or was cut short. R7 asks this only of a finished catch-up and has the next one read again what one cut short had read, so the model keeps more than the rule asks. Delivery also waits until what Slack pushed has landed, which models the 3-second hold (R4 out of scope) |
+| R21 resend              | a live envelope of a message posted before the last catch-up started (`liveFrom`) is acked and dropped: that catch-up read it, or skipped it. R21 also drops such a live event held across the reconnect; the model keeps held messages and delivers them, so it delivers more than the rule allows, which no invariant forbids                                                                                                                                                                                                                                  |
+| R2                      | a delivery is three steps: save the intent, write to the session, save delivered plus cursor (`Margin` re-reads below the cursor). A crash restarts from the file, and a saved intent is delivered again, marked `possible_duplicate`                                                                                                                                                                                                                                                                                                                            |
 
 Invariants:
 
 - `R2`: every repeat in the session log is marked.
 - `R2Edit`: an edit never comes before its message.
 - `R5`: an edit never repeats the text the session has.
-- `R4`: ts order within a thread and among top-level messages, except that a message dropped live under R20 and found by a later catch-up may come after newer ones.
+- `R4`: ts order within a thread and among top-level messages. R4 lets a message dropped live under R20 and found by a later catch-up arrive out of that order; the model's excuse is narrower and covers only that message coming after newer ones.
 - `R10`: only allowed senders are delivered.
 - `AckOnce`: each frame is acked once.
 - `R7Safe`: an allowed, unexcused message not yet in the session can still reach it, both from memory and from the saved file after a crash.
@@ -44,13 +44,13 @@ The temporal property `R7`: every allowed message is eventually written, or excu
 
 - Deliver adds the seen mark, or the done mark at once when the message is already handled.
 - An own post later in the thread, or the session's `done`, replaces seen with done: add the done mark, then remove the seen one.
-- Reaction calls run one at a time from a queue saved after each call. A call is `ok`, fails, or applies with its reply lost (`already_reacted` and `no_reaction` count as success). After 3 tries it is given up. When adding done is given up, the queued removal of that message's seen mark is dropped, so seen stays (R18).
+- Reaction calls run one at a time from a queue saved before each call, so a restart repeats at most one call (R18). A call is `ok`, fails, or applies with its reply lost (`already_reacted` and `no_reaction` count as success). After 3 tries it is given up. When adding done is given up, the queued removal of that message's seen mark is dropped, so seen stays (R18).
 - `done` is saved before it is answered.
 - A crash restores marks, queue, done requests and the delivered set from the file. A delivery that was not saved is delivered again, so it is marked again. A seen message whose thread got an own post since is made done.
 
 Invariants:
 
-- `NeverBare`: a message once marked never shows no own mark, give-ups included. Only a message whose first add was given up, and so never showed a mark, can be bare (R18: a delivered message always carries one of the two).
+- `NeverBare`: a message once marked never shows no own mark, give-ups included. Only a message whose first add was given up, and so never showed a mark, can be bare. R18 names one more bare case: a first reaction dropped because the reaction queue was full. The model's queue has no limit, so that case is not modelled.
 - `DoneSticks`: seen never comes back after done.
 - `AtRest`: with an empty queue, the marks are exact.
 - `DoneMeansAnswered`: done means the session said so, or the own side posted later in the thread.
@@ -81,7 +81,7 @@ These are the results on 2026-11-22 (4c+), exhaustive BFS on 4 workers, with not
 | `Marks.cfg`                   | R18, 3 msgs, 1 crash, 2 failures (no call is given up)                | passes: 4,398,346 states, depth 24, 24 s        |
 | `marks-giveUp.cfg`            | R18, 3 msgs, 1 crash, 3 failures, so a call can be given up           | passes: 8,159,874 states, depth 26, 42 s        |
 | `design-releaseMargin.cfg`    | the `releaseOnDisconnect` bug with a margin of one message            | passes: 158,208 states, depth 33, 2 s           |
-| `design-dropGathered.cfg`     | what a catch-up gathered dropped at a disconnect (finding 6)          | passes: 5,744,469 states, depth 38, 36 s        |
+| `design-dropGathered.cfg`     | what any catch-up gathered dropped at a disconnect (finding 6)        | passes: 5,744,469 states, depth 38, 36 s        |
 | `design-badTsParent.cfg`      | finding 1, excused by R21                                             | passes: 754,464 states, depth 35, 6 s           |
 | `design-live-badTsParent.cfg` | finding 1 as a lasso, excused by R21                                  | passes: 547 states, depth 16, 0 s               |
 | `marks-design-giveUp.cfg`     | finding 2, fixed: the done add given up, 1 crash                      | passes: 71,262 states, depth 22, 1 s            |
@@ -135,7 +135,7 @@ Each is a case the rules let go wrong, leave undefined, or contradict, as the sp
 2. **R18 can leave a delivered message with no mark.**
    - "Adds the second, then removes the first", with each call "given up" after its tries. When the add of the done mark is given up, the removal of seen still runs, and the message shows nothing. That reads as "never reached the session".
    - The rule should say the first is removed only after the second was added.
-   - **Settled by R18 and fixed in the code**: when adding the second is given up, the first stays. `marks-design-giveUp` passes with `NeverBare` tightened; `marks-bug-giveUpRemoves` plants the old behaviour back and fails it.
+   - **Settled by R18 and fixed in the code**: when adding the second is given up, the first stays, and a delivered message carries neither only when its first reaction was given up or dropped from a full queue. `marks-design-giveUp` passes with `NeverBare` tightened; `marks-bug-giveUpRemoves` plants the old behaviour back and fails it.
 3. **"A post of the own side appears in that message's thread" (R18) is ambiguous.**
    - Read literally, an own-side typed message is done the moment it is delivered, since it is itself an own post in its own thread. So is any later message in a thread the own side posted in earlier.
    - The model passes with "after the message". The rule should say "after it".
@@ -144,19 +144,19 @@ Each is a case the rules let go wrong, leave undefined, or contradict, as the sp
    - m1's envelope does not decode, so it is acked and dropped, and m2 is delivered. A reconnect within the margin finds m1 in history and delivers it after m2.
    - R4 exempts only Slack's reordering beyond 3 s.
    - Either R4 or the R20 out-of-scope note needs the sentence "a message recovered this way can arrive out of order".
-   - **Settled by R4**, which now allows it. `r20` passes with the excuse (`"r20Order"`) and `noexcuse-r20` fails without it.
+   - **Settled by R4**, which now lets such a message arrive out of order. `r20` passes with the excuse (`"r20Order"`) and `noexcuse-r20` fails without it.
 5. **R21's skip plus Slack's resend gives disorder or loss, and the rules pick neither.**
    - m1 decodes live but not in history. Its envelope is in flight when the connection drops, and catch-up skips it.
    - Taking Slack's resend breaks R4 (the model's choice). Dropping live frames older than the catch-up start loses m1 (the code's choice), and only R21's "skips it again" covers that.
-   - **Settled by R21, for the code's choice**: the resend is dropped, so the message is not delivered. The model drops a live message posted before the last catch-up started, and `design-r21resend` passes. `bug-takeResend` plants the spike's choice back and fails `R4`, with R4's R20 excuse on, so that excuse does not cover it; `bug-liveFromAtEnd` cuts from the catch-up's end instead of its start, too wide, and fails `R7Safe`.
+   - **Settled by R21, for the code's choice**: for a message posted before the catch-up started, its live event, resent or held across the reconnect, is dropped, so the message is not delivered. The model drops a resend of a message posted before the last catch-up started, and `design-r21resend` passes; it keeps a held one (see the R21 resend row above). `bug-takeResend` plants the spike's choice back and fails `R4`, with R4's R20 excuse on, so that excuse does not cover it; `bug-liveFromAtEnd` cuts from the catch-up's end instead of its start, too wide, and fails `R7Safe`.
 6. **Implied, not written.** Each was a counterexample to a first draft of this model:
    - after a disconnect, live messages wait for the next catch-up;
    - what a catch-up gathered survives a disconnect;
    - `done` is saved before it is answered;
-   - the reaction queue is saved per call.
+   - the reaction queue is saved before each call.
 
    The code does all four; only the third is written down, in a comment in `src/core.ts`.
-   - **Settled by R7 and R18**, which now state all four. `bug-releaseOnDisconnect`, `marks-bug-doneNotSaved` and `marks-bug-lazySave` catch a break of the first, third and fourth. The second is now modelled (a connect keeps what was gathered), but `design-dropGathered`, which drops it at a disconnect, passes: in this model the next catch-up reads those messages again, since none is below the cursor, so R7 does not depend on it here.
+   - **Settled by R7 and R18**, which now state all four: R7 that what a finished catch-up gathered survives, and what one cut short had read is read again; R18 that the queue is saved before each call, so a restart repeats at most one call. `bug-releaseOnDisconnect`, `marks-bug-doneNotSaved` and `marks-bug-lazySave` catch a break of the first, third and fourth. The second is now modelled (a connect keeps what was gathered), but `design-dropGathered`, which drops it at a disconnect, passes: in this model the next catch-up reads those messages again, since none is below the cursor, so R7 does not depend on it here.
 
 ## Model and code compared
 
@@ -183,9 +183,9 @@ Where they agree:
 Where they differ:
 
 1. **The cursor.** The code's is a time watermark (`caughtUpUntilMs`, set at a catch-up's start and on each live tick) with a 10-minute margin and the `claimed` map for dedup. The model's is the stricter "highest ts delivered" with margin 0, which is why it needed finding 6's first two obligations. The code's margin covers them, as `design-releaseMargin` shows.
-2. **What a catch-up gathered.** The code hands an ended catch-up's messages to its delivery queue, which is saved and survives a disconnect and a restart; a catch-up cut off by a disconnect drops what it had read, and the next one reads it again. The model keeps both across a disconnect and drops both on a crash.
-3. **Held live messages.** The code saves them before the ack, and drops at release any held across a reconnect that is older than the new catch-up's start; that catch-up's history delivers them, or skips them under R21. The model keeps them held across a disconnect, loses them on a crash, and relies on catch-up.
-4. **The last call's save.** The code saves the reaction queue before each call, so the save after a call is the one before the next; after the last call the queue is saved at the next save (a tick, a delivery). The model's `Exec` needs a save before each try. A restart repeats at most the last call in both, and both calls are safe to repeat.
+2. **What a catch-up gathered.** The code hands an ended catch-up's messages to its delivery queue, which is saved and survives a disconnect and a restart; a catch-up cut off by a disconnect drops what it had read, and the next one reads it again. R7 says the same. The model keeps both across a disconnect and drops both on a crash; keeping a cut-short catch-up's is more than R7 asks.
+3. **Held live messages.** The code saves them before the ack, and drops at release any held across a reconnect that is older than the new catch-up's start; that catch-up's history delivers them, or skips them under R21, which says so. The model keeps them held across a disconnect, loses them on a crash, and relies on catch-up; it drops only a resend, so it may deliver a held message the catch-up skipped.
+4. **The last call's save.** The code saves the reaction queue before each call, so the save after a call is the one before the next; after the last call the queue is saved at the next save (a tick, a delivery). The model's `Exec` needs a save before each try. A restart repeats at most one call in both, as R18 says, and both calls are safe to repeat.
 5. **A done for a message not taken in.** The model's `Done` takes any posted message; the code answers `taken: false` for one it never took in (`markDone`), so such a done is not kept.
 6. **Finding 1's granularity.** `slack-api.ts` makes no `ThreadStub` when the ts, `reply_count` or `latest_reply` does not decode; the model has only `badTs`.
 

@@ -108,7 +108,7 @@ KeepEyes(c, rest) ==
 
 Exec(i, outcome) ==
     /\ i \in 1..Len(q) /\ (i = 1 \/ Bug = "unordered")
-    \* The queue's progress is saved after each call, so a restart replays at most the last one.
+    \* The queue is saved before each call (R18), so a restart repeats at most one call.
     /\ (~dirty \/ Bug = "lazySave")
     /\ outcome \in {"ok", "fail", "lost"}
     /\ outcome # "ok" => fails < MaxFail
@@ -158,9 +158,11 @@ Spec == Init /\ [][Next]_vars
 
 GaveUp(m) == \E g \in gaveUp : g.m = m
 
-\* R18: a delivered message always carries one of the two. Once a mark
-\* showed on it, it never shows none, give-ups included; only a message
-\* whose first add was given up, and so never showed a mark, can be bare.
+\* R18: when adding the second is given up, the first stays. Once a mark
+\* showed on a message, it never shows none, give-ups included; only a
+\* message whose first add was given up, and so never showed a mark, can be
+\* bare. The queue has no limit here, so R18's other bare case, a first
+\* reaction dropped because the queue was full, is not modelled.
 NeverBare == \A m \in shown : rx[m] # {}
 
 \* R18: done is final; eyes never come back after check.
