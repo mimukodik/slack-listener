@@ -111,7 +111,10 @@ const RequestRow = Schema.Struct({
   request: Schema.String,
   answer: Schema.String,
 });
-const NextRow = Schema.Struct({ next: Schema.Number });
+const NextRow = Schema.Struct({
+  next: Schema.Number,
+  lastAt: Schema.NullOr(Schema.Number),
+});
 
 const decodeEventRows = Schema.decodeUnknownEffect(Schema.Array(EventRow));
 const decodeBodyRows = Schema.decodeUnknownEffect(Schema.Array(BodyRow));
@@ -163,9 +166,15 @@ const makeStore = Effect.gen(function* () {
     );
 
   // Appends the event and moves the task's row to match, in the caller's
-  // transaction.
-  const append = (event: Event, before: Task | undefined) =>
+  // transaction. Events never go back in time in cursor order.
+  const append = (event: Event, before: Task | undefined, lastAt: number) =>
     Effect.gen(function* () {
+      if (event.at < lastAt)
+        return yield* Effect.die(
+          new Error(
+            `hub: event ${event.cursor} at ${event.at} is before the last event's ${lastAt}`,
+          ),
+        );
       const after = evolve(before, event);
       yield* sql`INSERT INTO hub_events (cursor, task_id, kind, actor, at, change) VALUES (${event.cursor}, ${event.taskId}, ${event.change._tag}, ${event.actor}, ${event.at}, ${Schema.encodeSync(changeJson)(event.change)})`;
       const body = Schema.encodeSync(taskJson)(after);
@@ -176,10 +185,14 @@ const makeStore = Effect.gen(function* () {
       return { task: after, cursor: event.cursor };
     });
 
-  const nextCursor =
-    sql`SELECT COALESCE(MAX(cursor), 0) + 1 AS next FROM hub_events`.pipe(
+  // The next cursor, and the time of the last event (0 when none).
+  const head =
+    sql`SELECT COALESCE(MAX(cursor), 0) + 1 AS next, (SELECT at FROM hub_events ORDER BY cursor DESC LIMIT 1) AS lastAt FROM hub_events`.pipe(
       Effect.flatMap(decodeNextRows),
-      Effect.map((rows) => rows[0]?.next ?? 1),
+      Effect.map((rows) => ({
+        cursor: rows[0]?.next ?? 1,
+        lastAt: rows[0]?.lastAt ?? 0,
+      })),
     );
 
   const eventOf = (
@@ -193,7 +206,7 @@ const makeStore = Effect.gen(function* () {
   // A fresh request, decided and applied.
   const apply = (principal: string, request: Request, now: number) =>
     Effect.gen(function* () {
-      const cursor = yield* nextCursor;
+      const { cursor, lastAt } = yield* head;
       switch (request._tag) {
         case "create": {
           const change = {
@@ -202,7 +215,7 @@ const makeStore = Effect.gen(function* () {
             labels: request.labels,
           };
           const event = eventOf(cursor, `T${cursor}`, principal, now, change);
-          return done(yield* append(event, undefined));
+          return done(yield* append(event, undefined, lastAt));
         }
         case "claim": {
           const from = transitions.claim.from;
@@ -214,7 +227,7 @@ const makeStore = Effect.gen(function* () {
           if (task === undefined) return done({ task: null, cursor: null });
           const change = { _tag: "claimed" as const, leaseMs: request.leaseMs };
           const event = eventOf(cursor, task.id, principal, now, change);
-          return done(yield* append(event, task));
+          return done(yield* append(event, task, lastAt));
         }
         case "move": {
           const task = yield* findTask(request.taskId);
@@ -234,17 +247,19 @@ const makeStore = Effect.gen(function* () {
             now,
             decided.success,
           );
-          return done(yield* append(event, task));
+          return done(yield* append(event, task, lastAt));
         }
       }
     });
 
   const execute = (principal: string, requestKey: string, request: Request) =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
       const fingerprint = canonical(request);
       const answer = yield* sql.withTransaction(
         Effect.gen(function* () {
+          // Read under the write lock: a call queued behind others decides
+          // with the time it runs at, not the time it arrived.
+          const now = yield* Clock.currentTimeMillis;
           const prior =
             yield* sql`SELECT request, answer FROM hub_requests WHERE principal = ${principal} AND request_key = ${requestKey}`.pipe(
               Effect.flatMap(decodeRequestRows),

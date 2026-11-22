@@ -151,6 +151,7 @@ export class Model {
         creator: principal,
         state: "submitted",
         claimant: null,
+        claimedAt: null,
         leaseExpiresAt: null,
         leaseRemainingMs: null,
         input: null,
@@ -171,14 +172,21 @@ export class Model {
 
   private claim(principal: Principal, input: Input, now: number): Expected {
     const wanted = strs(input, "labels");
-    const task = [...this.tasks.values()].find(
-      (each) =>
-        wanted.every((label) => each.labels.includes(label)) &&
-        (each.state === "submitted" ||
-          (each.state === "working" &&
-            each.leaseExpiresAt !== null &&
-            each.leaseExpiresAt <= now)),
-    );
+    // Least recently claimed first, never claimed first, ties by creation.
+    const task = [...this.tasks.values()]
+      .sort(
+        (a, b) =>
+          (a.claimedAt ?? Number.MIN_SAFE_INTEGER) -
+          (b.claimedAt ?? Number.MIN_SAFE_INTEGER),
+      )
+      .find(
+        (each) =>
+          wanted.every((label) => each.labels.includes(label)) &&
+          (each.state === "submitted" ||
+            (each.state === "working" &&
+              each.leaseExpiresAt !== null &&
+              each.leaseExpiresAt <= now)),
+      );
     if (task === undefined) return ok({ _tag: "NoneReady" });
     const leaseMs = num(input, "leaseMs");
     const claimed = this.record(
@@ -186,6 +194,7 @@ export class Model {
         ...task,
         state: "working",
         claimant: principal,
+        claimedAt: now,
         leaseExpiresAt: now + leaseMs,
       },
       principal,

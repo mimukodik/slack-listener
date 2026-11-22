@@ -134,7 +134,7 @@ export const taskCreate = defineAction({
 export const taskClaim = defineAction({
   name: "taskClaim",
   description:
-    "Claims the oldest ready task that has every label given, with a lease of leaseMs; NoneReady when there is none.",
+    "Claims the ready task claimed least recently (never claimed first, then in creation order) that has every label given, with a lease of leaseMs; NoneReady when there is none.",
   kind: "mutation",
   input: { requestKey: RequestKey, labels: Labels, leaseMs: LeaseMs },
   success: Schema.Union([Claimed, NoneReady]),
