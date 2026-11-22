@@ -58,6 +58,10 @@ export interface Reaction {
   ts: string;
 }
 
+// How a reaction call ended: done (Slack's "already as asked" included), or
+// given up after its tries (R18).
+export type ReactionOutcome = "ok" | "given_up";
+
 export interface Saved {
   version: 1;
   caughtUpUntilMs: number;
@@ -114,7 +118,7 @@ export type CoreEvent =
   | { type: "fetch_failed"; catchUpId: number; reason: string }
   | { type: "delivered"; key: string }
   | { type: "deliver_failed"; key: string; reason: string }
-  | { type: "reaction_done"; reaction: Reaction }
+  | { type: "reaction_done"; reaction: Reaction; outcome: ReactionOutcome }
   | { type: "marked_done"; ts: string }
   | { type: "timer"; name: TimerName };
 
@@ -475,6 +479,29 @@ function markDone(state: State, ts: string, effects: CoreEffect[]): State {
     { ...state, marked },
     state.reacted[ts] === undefined ? [] : [ts],
   );
+}
+
+// R18: when adding the handled mark is given up, the seen mark stays, so a
+// delivered message keeps one of the two: its queued removal is dropped. A
+// given-up add of the seen mark at delivery leaves the message without a
+// mark, and a given-up removal leaves it with both; neither queues more.
+function afterReaction(
+  done: Reaction,
+  outcome: ReactionOutcome,
+  rest: Reaction[],
+  effects: CoreEffect[],
+): Reaction[] {
+  if (outcome === "ok" || done.action !== "add" || done.mark !== "handled")
+    return rest;
+  const kept = rest.filter(
+    (r) => !(r.action === "remove" && r.mark === "seen" && r.ts === done.ts),
+  );
+  if (kept.length < rest.length)
+    effects.push({
+      type: "log",
+      message: `seen mark kept on ${done.ts}: adding the handled mark was given up`,
+    });
+  return kept;
 }
 
 // One reaction call at a time, so a removal never overtakes its addition.
@@ -876,7 +903,11 @@ function reduce(
         head.ts !== event.reaction.ts
       )
         return state;
-      return { ...state, reactions: rest, reactionInflight: false };
+      return {
+        ...state,
+        reactions: afterReaction(head, event.outcome, rest, effects),
+        reactionInflight: false,
+      };
     }
     case "marked_done": {
       // A mark exists nowhere else, so it is saved before the session hears

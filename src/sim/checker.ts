@@ -203,9 +203,11 @@ export function ownAnswers(slack: SlackFake, ts: string): StoredMessage[] {
 // thread and the session has not marked it done, and once either holds the
 // handled mark instead; never both, never neither.
 // A done the session sent but never heard back about, because the listener
-// crashed first, may or may not have been taken. A message a reaction call was given up for,
-// after its tries all failed in a row, may be either way, as the rule allows;
-// so may one whose answer was deleted, which the listener may never have seen.
+// crashed first, may or may not have been taken. A message a reaction call was
+// given up for, after its tries all failed in a row, may be either way, as the
+// rule allows, but still carries one of the two, unless the call given up was
+// its first mark's add; so may one whose answer was deleted, which the
+// listener may never have seen.
 export function checkReactions(
   slack: SlackFake,
   session: SessionRecord[],
@@ -221,12 +223,16 @@ export function checkReactions(
   for (const ts of delivered) {
     const stored = slack.messages.get(ts);
     if (stored === undefined || stored.deleted) continue;
-    if (slack.reactionGivenUp.has(ts)) continue;
     const answers = ownAnswers(slack, ts);
     if (answers.some((answer) => answer.deleted)) continue;
     const on = slack.reactions.get(ts);
     const hasSeen = on?.has(`${people.ownBot}:${names.seen}`) === true;
     const hasHandled = on?.has(`${people.ownBot}:${names.handled}`) === true;
+    if (slack.reactionGivenUp.has(ts)) {
+      if (!hasSeen && !hasHandled && !slack.firstMarkGivenUp.has(ts))
+        return `R18: delivered ${ts} carries neither mark after a given-up call`;
+      continue;
+    }
     if (markSent.has(ts) && !markConfirmed.has(ts)) continue;
     const handled = answers.length > 0 || markConfirmed.has(ts);
     const by = answers.length > 0 ? "answered" : "marked it done";

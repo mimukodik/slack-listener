@@ -37,6 +37,7 @@ import {
   type CoreEvent,
   type Delivery,
   type Reaction,
+  type ReactionOutcome,
   type Saved,
   type State,
   type TimerName,
@@ -657,12 +658,15 @@ export function runShell(
             reactionDone.has(error.reason) ? Effect.void : Effect.fail(error),
           ),
           Effect.retry(reactionRetry),
+          Effect.as<ReactionOutcome>("ok"),
           Effect.catch((error) =>
             log(
               `reaction ${reaction.action} ${reaction.mark} on ${reaction.ts} given up: ${error.reason}`,
-            ),
+            ).pipe(Effect.as<ReactionOutcome>("given_up")),
           ),
-          Effect.andThen(dispatch({ type: "reaction_done", reaction })),
+          Effect.flatMap((outcome) =>
+            dispatch({ type: "reaction_done", reaction, outcome }),
+          ),
         );
       };
 

@@ -1733,6 +1733,63 @@ describe("retries on a virtual clock", () => {
       expect(shell.stdio.stderr.join("")).not.toContain("given up");
     });
 
+    // The shell tells the core a call was given up, so the core keeps the
+    // seen mark when adding the handled one fails (marks-design-giveUp).
+    it("adding the handled mark given up keeps the seen mark", async () => {
+      const shell = virtualShell(
+        1,
+        (method, params) =>
+          method === "reactions.add" &&
+          params.get("name") === "heavy_check_mark"
+            ? { ok: false, error: "ratelimited" }
+            : (slackBodies[method] ?? { ok: false }),
+        (socket, runtime) => {
+          runtime.at(1, () => socket.open());
+          runtime.at(2, () => socket.frame({ type: "hello" }));
+          runtime.at(1000, () =>
+            socket.frame(
+              envelope("E1", {
+                type: "message",
+                channel: "C0WATCH001",
+                user: "U0OTHER01",
+                text: "E1",
+                ts: msToTs(runtime.nowMs),
+              }),
+            ),
+          );
+          runtime.at(10_000, () =>
+            socket.frame(
+              envelope("E2", {
+                type: "message",
+                channel: "C0WATCH001",
+                user: "U0OWN0001",
+                app_id: "ACLAUDE01",
+                text: "E2",
+                thread_ts: firstTs,
+                ts: msToTs(runtime.nowMs),
+              }),
+            ),
+          );
+        },
+      );
+      await shell.run(60_000);
+      const onFirst = shell.calls
+        .filter((call) => call.endsWith(` ${firstTs}`))
+        .map((call) => call.split(" ").slice(0, 2).join(" "));
+      // Seen at 4000; our agent's answer at 10000 is held 3 s, then the
+      // handled mark is tried at 13000, 14000 and 16000 and given up, and
+      // the seen mark is never removed.
+      expect(onFirst).toEqual([
+        "4000 reactions.add",
+        "13000 reactions.add",
+        "14000 reactions.add",
+        "16000 reactions.add",
+      ]);
+      expect(shell.stdio.stderr.join("")).toContain(
+        `reaction add handled on ${firstTs} given up: ratelimited`,
+      );
+    });
+
     it("answered as already done is not tried again", async () => {
       for (const error of [
         "already_reacted",

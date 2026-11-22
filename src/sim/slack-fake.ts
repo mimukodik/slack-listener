@@ -158,10 +158,12 @@ export class SlackFake {
   // a token adds and removes only its own user's reaction.
   readonly reactions = new Map<string, Set<string>>();
   // R18 lets the listener give up a call after its tries: the failures in a
-  // row per call ("method ts"), and the messages a call was given up for,
-  // which is the tries (three) failing in a row.
+  // row per call ("method ts"), the messages a call was given up for, which
+  // is the tries (three) failing in a row, and those of them whose given-up
+  // call was an add while the message carried no own mark, its first.
   readonly reactionFailures = new Map<string, number>();
   readonly reactionGivenUp = new Set<string>();
+  readonly firstMarkGivenUp = new Set<string>();
   private counter = 0;
 
   react(

@@ -643,7 +643,8 @@ describe("R18: a reaction says the message reached the session", () => {
     );
   const done = (d: Driver) => {
     const [head] = d.state.reactions;
-    if (head !== undefined) d.send({ type: "reaction_done", reaction: head });
+    if (head !== undefined)
+      d.send({ type: "reaction_done", reaction: head, outcome: "ok" });
   };
 
   it("adds the seen mark once the message is delivered, and trades it for the handled one when our side answers in the thread", () => {
@@ -758,6 +759,78 @@ describe("R18: a reaction says the message reached the session", () => {
     expect(effects).toEqual([
       expect.objectContaining({ type: "log" }),
       { type: "mark_answer", ts: ts(99), taken: false },
+    ]);
+  });
+
+  // The counterexample TLC found for marks-design-giveUp.cfg (spec/listener),
+  // replayed step for step through the core: m1 and m2 posted by our side,
+  // typed; m1 delivered; the session marks m1 done; the seen mark is added;
+  // a done for m2, which the listener never took in; adding the handled mark
+  // fails three times and is given up (the shell's three tries end in one
+  // given_up); the queue is drained. Slack's marks are kept as the calls
+  // land. Before the fix the seen mark's removal still ran and m1 ended bare.
+  it("marks-design-giveUp: when adding the handled mark is given up, the seen mark stays", () => {
+    const slack = new Map<string, Set<string>>();
+    const answer = (d: Driver, outcome: "ok" | "given_up") => {
+      const [head] = d.state.reactions;
+      if (head === undefined) throw new Error("no reaction call in flight");
+      if (outcome === "ok") {
+        const on = slack.get(head.ts) ?? new Set<string>();
+        if (head.action === "add") on.add(head.mark);
+        else on.delete(head.mark);
+        slack.set(head.ts, on);
+      }
+      d.send({ type: "reaction_done", reaction: head, outcome });
+    };
+    const d = driver();
+    d.connect();
+    const m1 = post(10, people.own);
+    d.envelope(m1);
+    d.flush();
+    expect(d.deliveries.map((x) => x.ts)).toEqual([ts(10)]);
+    d.send({ type: "marked_done", ts: ts(10) });
+    answer(d, "ok");
+    expect(slack.get(ts(10))).toEqual(new Set(["seen"]));
+    const m2 = ts(11);
+    expect(d.send({ type: "marked_done", ts: m2 })).toContainEqual({
+      type: "mark_answer",
+      ts: m2,
+      taken: false,
+    });
+    expect(d.state.reactions[0]).toEqual({
+      action: "add",
+      mark: "handled",
+      ts: ts(10),
+    });
+    answer(d, "given_up");
+    while (d.state.reactions.length > 0) answer(d, "ok");
+    expect(slack.get(ts(10))).toEqual(new Set(["seen"]));
+    expect(reactions(d)).toEqual([
+      `add seen ${ts(10)}`,
+      `add handled ${ts(10)}`,
+    ]);
+  });
+
+  it("a given-up add of the seen mark or a given-up removal queues nothing more", () => {
+    const d = driver();
+    d.connect();
+    d.envelope(post(10, people.other));
+    d.flush();
+    const [seen] = d.state.reactions;
+    if (seen === undefined) throw new Error("no seen call");
+    d.send({ type: "reaction_done", reaction: seen, outcome: "given_up" });
+    expect(d.state.reactions).toEqual([]);
+    d.send({ type: "marked_done", ts: ts(10) });
+    done(d);
+    const [removal] = d.state.reactions;
+    expect(removal).toEqual({ action: "remove", mark: "seen", ts: ts(10) });
+    if (removal === undefined) throw new Error("no removal");
+    d.send({ type: "reaction_done", reaction: removal, outcome: "given_up" });
+    expect(d.state.reactions).toEqual([]);
+    expect(reactions(d)).toEqual([
+      `add seen ${ts(10)}`,
+      `add handled ${ts(10)}`,
+      `remove seen ${ts(10)}`,
     ]);
   });
 
