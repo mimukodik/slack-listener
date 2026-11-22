@@ -19,8 +19,14 @@ import {
   testGrants,
   surfaces,
 } from "./harness.ts";
+import { mcpPath } from "./mcp.ts";
 import { inMemoryPolicy } from "./policy.ts";
-import { permissions } from "./receipts.ts";
+import {
+  getReceipt,
+  makeStore,
+  permissions,
+  ReceiptStore,
+} from "./receipts.ts";
 
 // Inputs: known events, an unknown one, malformed ids, wrong types, a missing
 // field and an extra one.
@@ -271,5 +277,57 @@ describe("what a handler receives", () => {
       );
       expect(each.services).not.toContain("action/CurrentPrincipal");
     }
+  });
+});
+
+describe("the MCP endpoint", () => {
+  it("takes the bearer from the Authorization header only, never from the payload", async () => {
+    const services = Context.make(ReceiptStore, makeStore(["E1"]));
+    const post = (headers: Record<string, string>, meta: object) =>
+      new Request(`http://actions.invalid${mcpPath}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+          "mcp-method": "tools/call",
+          "mcp-name": "getReceipt",
+          ...headers,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "getReceipt",
+            arguments: { eventId: "E1" },
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientInfo": {
+                name: "test",
+                version: "0.0.1",
+              },
+              "io.modelcontextprotocol/clientCapabilities": {},
+              ...meta,
+            },
+          },
+        }),
+      });
+    const texts = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = yield* makeWorld([provideAction(getReceipt, services)]);
+          const answer = (request: Request) =>
+            Effect.promise(async () => (await world.fetch(request)).text());
+          return [
+            yield* answer(post({}, { "mimukodik.action/bearer": "t-alice" })),
+            yield* answer(post({ authorization: "Bearer t-alice" }, {})),
+          ];
+        }),
+      ).pipe(Effect.provide(platformLayer)),
+    );
+    expect(texts[0]).toContain("Unauthenticated");
+    expect(texts[1]).toContain('\\"receipt\\":null');
+    expect(texts[1]).not.toContain("Unauthenticated");
   });
 });

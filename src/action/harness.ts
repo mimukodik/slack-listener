@@ -1,18 +1,18 @@
-// A world in which every surface of a set of actions answers in process: the
-// REST server behind a fetch function, an MCP server behind McpTest's
-// in-memory client, atom clients over that same fetch, and invoke called
-// directly as the oracle. A call names its surface; every answer is reduced
+// A world in which every surface of a set of actions answers in process: one
+// HTTP server with the REST API and the MCP endpoint behind a fetch function,
+// MCP clients over Streamable HTTP and atom clients over that same fetch, and
+// invoke called directly as the oracle. A call names its surface; every answer is reduced
 // to one Observation, so the surfaces can be compared call by call.
 //
 // Everything runs on the services of the fiber that builds the world: its
-// Scheduler, Clock and Random reach the REST requests (the web handler runs
-// each request on the builder's context), the MCP server (built in the same
-// scope) and the atom registry (its tasks go to the builder's Scheduler). In a
+// Scheduler, Clock and Random reach the REST and MCP requests (the web
+// handler runs each request on the builder's context), the MCP clients (built
+// in the same scope) and the atom registry (its tasks go to the builder's Scheduler). In a
 // plain test that is Effect's default runtime; under SimRuntime it is the
 // seeded one, which is what lets the agreement run under the simulator.
 import { Cause, Effect, Exit, Layer, Result, Scheduler, Schema } from "effect";
 import type { Scope } from "effect";
-import { McpProtocol, McpTest } from "effect/ai";
+import { McpProtocol } from "effect/ai";
 import {
   HttpEffect,
   HttpRouter,
@@ -34,12 +34,13 @@ import {
 import {
   type AtomClient,
   atomClientOf,
+  baseUrl,
   atomOf,
   type Fetch,
   reactivityKeys,
 } from "./atoms.ts";
 import { apiOf, serverLayer } from "./http.ts";
-import { bearerMetaKey, registrationsOf, toolkitOf } from "./mcp.ts";
+import { mcpHttpLayer, mcpPath } from "./mcp.ts";
 import { inMemoryPolicy } from "./policy.ts";
 import { permissions } from "./receipts.ts";
 
@@ -66,7 +67,7 @@ export type World = {
   readonly call: (call: Call) => Effect.Effect<Observation>;
   // The fetch over the REST server, for calls a test builds itself.
   readonly fetch: Fetch;
-  // Requests that reached the REST server, from REST and atom calls.
+  // Requests that reached the HTTP server, from REST, MCP and atom calls.
   readonly requests: () => number;
 };
 
@@ -214,6 +215,33 @@ function fromRest(codecs: Codecs, status: number, body: string): Observation {
   return { kind: "failure", error: parsed.success };
 }
 
+// The tool result in an MCP answer: a JSON-RPC response, sent as JSON or as
+// the data of a server-sent event.
+const ToolResult = Schema.Struct({
+  isError: Schema.optional(Schema.Boolean),
+  structuredContent: Schema.optional(Schema.Unknown),
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      text: Schema.optional(Schema.String),
+    }),
+  ),
+});
+const decodeAnswer = Schema.decodeUnknownSync(
+  Schema.Struct({ result: ToolResult }),
+);
+
+function mcpResultOf(text: string): typeof ToolResult.Type {
+  const data = text
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .join("\n");
+  const parsed = parseJson(data === "" ? text : data);
+  assert(Result.isSuccess(parsed), "an MCP answer that is not JSON");
+  return decodeAnswer(parsed.success).result;
+}
+
 // An MCP tool result as an MCP client sees it.
 function fromMcp(
   codecs: Codecs,
@@ -281,11 +309,15 @@ export function makeWorld(
     const builder = yield* Effect.context<Principals | Policy>();
     const principals = yield* Principals;
 
-    // REST: the server's handler over the builder's context, behind fetch.
+    // REST and MCP: one server's handler over the builder's context, behind
+    // fetch.
     const api = apiOf("actions", actions);
     const handlerEffect = yield* HttpRouter.toHttpEffect(
-      serverLayer(api, actions).pipe(Layer.provide(HttpServer.layerServices)),
-    );
+      Layer.mergeAll(serverLayer(api, actions), mcpHttpLayer(actions)).pipe(
+        Layer.provide(HttpServer.layerServices),
+      ),
+      // The only failure is a protocol the endpoint does not serve: a bug.
+    ).pipe(Effect.orDie);
     const handler = HttpEffect.toWebHandlerWith<
       Principals | Policy,
       HttpServerRequest.HttpServerRequest | Scope.Scope | Policy
@@ -306,12 +338,50 @@ export function makeWorld(
       },
     );
 
-    // MCP: one in-memory client; the bearer travels per request.
-    const mcp = yield* McpTest.makeClient(
-      registrationsOf(toolkitOf(actions), actions),
-      { protocols: [McpProtocol.v2026_07_28] },
-      // The only failure is a protocol version the server lacks: a bug here.
-    ).pipe(Effect.orDie);
+    // MCP: a tools/call over Streamable HTTP, as any MCP client posts it on
+    // the stateless 2026-07-28 protocol, with the bearer in the
+    // Authorization header. Hand-written: Effect's McpClient is experimental.
+    let mcpIds = 0;
+    const protocolVersion = McpProtocol.v2026_07_28.protocolVersion;
+    const mcpCall = (bearer: string, name: string, args: unknown) =>
+      Effect.gen(function* () {
+        mcpIds += 1;
+        const headers = new Headers({
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": protocolVersion,
+          "mcp-method": "tools/call",
+          "mcp-name": name,
+        });
+        if (bearer !== "") headers.set("authorization", `Bearer ${bearer}`);
+        const body = JSON.stringify({
+          jsonrpc: "2.0",
+          id: mcpIds,
+          method: "tools/call",
+          params: {
+            name,
+            arguments: args,
+            // The client identity every 2026-07-28 request carries; no secret.
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": protocolVersion,
+              "io.modelcontextprotocol/clientInfo": {
+                name: "harness",
+                version: "0.0.1",
+              },
+              "io.modelcontextprotocol/clientCapabilities": {},
+            },
+          },
+        });
+        const response = yield* Effect.promise(async () =>
+          fetch(`${baseUrl}${mcpPath}`, { method: "POST", headers, body }),
+        );
+        const text = yield* Effect.promise(async () => response.text());
+        assert(
+          response.status === 200,
+          `MCP answered ${response.status}: ${text}`,
+        );
+        return mcpResultOf(text);
+      });
 
     // Atoms: one client per bearer, one registry, whose tasks run on the
     // builder's scheduler.
@@ -365,11 +435,11 @@ export function makeWorld(
             return fromRest(codec, response.status, body);
           }
           case "mcp": {
-            const result = yield* mcp.callTool({
-              name: action.name,
-              arguments: input.input,
-              _meta: { [bearerMetaKey]: input.bearer },
-            });
+            const result = yield* mcpCall(
+              input.bearer,
+              action.name,
+              input.input,
+            );
             return fromMcp(codec, result);
           }
           case "atom": {

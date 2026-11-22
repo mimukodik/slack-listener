@@ -5,14 +5,15 @@
 // "return"): the error-mapping rule's MCP form (action.ts). A query is marked
 // read-only.
 //
-// The caller travels as a bearer to the hub, which the MCP side supplies: the
-// Authorization header on the HTTP transport, else the request's _meta
-// field named below, which an in-process or stdio client sets per request.
-// The Authentication middleware resolves it to a principal through
-// Principals, the same service REST uses, and never refuses by itself:
-// invoke does. Past the middleware only the principal travels.
+// The caller travels as a bearer to the hub in the Authorization header of
+// MCP's HTTP transport, never in the JSON-RPC payload, where a log of the
+// messages would keep it. The Authentication middleware resolves it to a
+// principal through Principals, the same service REST uses, and never
+// refuses by itself: invoke does. Past the middleware only the principal
+// travels. Over stdio there is no header, so no principal: how a stdio
+// session authenticates is open (DECISIONS.md, 2026-11-22).
 import { Effect, Layer, Schema } from "effect";
-import { McpServer, Tool, Toolkit } from "effect/ai";
+import { McpProtocol, McpServer, Tool, Toolkit } from "effect/ai";
 
 import {
   type AnyAction,
@@ -22,20 +23,18 @@ import {
   Principals,
 } from "./action.ts";
 
-export const bearerMetaKey = "mimukodik.action/bearer";
+export const mcpPath = "/mcp";
 
 const bearerPrefix = "Bearer ";
 
-// The bearer of one MCP request, from where the transport put it.
+// The bearer of one MCP request: the Authorization header, or none.
 export function bearerOf(
   headers: Readonly<Record<string, string | undefined>>,
-  metadata: Readonly<Record<string, unknown>> | undefined,
 ): string {
   const authorization = headers["authorization"];
-  if (authorization?.startsWith(bearerPrefix) === true)
-    return authorization.slice(bearerPrefix.length);
-  const fromMeta = metadata?.[bearerMetaKey];
-  return typeof fromMeta === "string" ? fromMeta : "";
+  return authorization?.startsWith(bearerPrefix) === true
+    ? authorization.slice(bearerPrefix.length)
+    : "";
 }
 
 function toolOf(action: AnyAction<unknown>) {
@@ -64,11 +63,9 @@ export const Authentication = McpServer.middleware<{
 }>()(
   Effect.gen(function* () {
     const principals = yield* Principals;
-    return (effect, { headers, requestContext }) =>
+    return (effect, { headers }) =>
       Effect.provideService(effect, CurrentPrincipal, {
-        principal: principals.authenticate(
-          bearerOf(headers, requestContext.requestMetadata),
-        ),
+        principal: principals.authenticate(bearerOf(headers)),
       });
   }),
 );
@@ -108,4 +105,17 @@ export function registrationsOf<R>(
       ),
     ),
   );
+}
+
+// The MCP endpoint for these actions on an HttpRouter, beside the REST API:
+// Streamable HTTP on the stateless 2026-07-28 protocol, so every call carries
+// its own Authorization header.
+export function mcpHttpLayer<R>(actions: ReadonlyArray<AnyAction<R>>) {
+  return McpServer.layerHttp({
+    name: "actions",
+    version: "0.0.1",
+    path: mcpPath,
+    protocols: [McpProtocol.v2026_07_28],
+    registrations: registrationsOf(toolkitOf(actions), actions),
+  });
 }

@@ -117,10 +117,13 @@ export const answerMsMax = 20;
 const opsPerTurn = 2048;
 
 // The simulator's scheduler with Effect's fixed yield budget in place of the
-// seeded one: the seed still picks the order of every task and every answer's
-// delay. A seeded budget reaches two liveness failures inside Effect 4.1.4
-// that its default scheduler never does (DECISIONS.md, 2026-11-22; pinned in
-// effect-liveness.spec.ts); they are Effect's, not the contract's.
+// seeded one. The seed still picks the order of every task and every answer's
+// delay, but no longer where a fiber is preempted: SimRuntime still draws a
+// budget each turn and this scheduler ignores it, so the draws, and with them
+// the rest of the seed's choices, stay as they were. The seeded budget
+// reaches two liveness failures that the fixed one does not (DECISIONS.md,
+// 2026-11-22; pinned in effect-liveness.spec.ts). A narrower floor is not
+// enough: with no budget below 2, seed 216 still stalls a bare MCP server.
 export function withFixedBudget<A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> {
