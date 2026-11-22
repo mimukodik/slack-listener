@@ -129,8 +129,9 @@ const observed = (
 };
 
 // The rule a wrong answer to this call breaks.
-function ruleOf(action: string, keyUsed: boolean): string {
+function ruleOf(action: string, keyUsed: boolean, wasFinal: boolean): string {
   if (keyUsed) return "T6";
+  if (wasFinal) return "T3";
   if (action === "taskAnswer") return "T5";
   if (action === "taskEvents") return "T4";
   if (
@@ -220,9 +221,18 @@ class Driver {
     this.done += 1;
     this.coverage.calls += 1;
     const { call } = flight.step;
+    // The store's own events first: a change the rules forbid names its rule.
+    const fault = ruleFault(snapshot);
+    if (fault !== undefined) {
+      this.failure = fault;
+      return;
+    }
     const wrong = observed(flight.expected, actual);
+    const state = flight.before.tasks.get(String(call.input["taskId"]))?.state;
+    const wasFinal =
+      state === "completed" || state === "failed" || state === "canceled";
     if (wrong !== undefined) {
-      this.failure = `${ruleOf(call.action, flight.keyUsed)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
+      this.failure = `${ruleOf(call.action, flight.keyUsed, wasFinal)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
       return;
     }
     this.count(flight, actual);
