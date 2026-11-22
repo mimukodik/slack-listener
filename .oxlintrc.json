@@ -233,6 +233,7 @@
         "src/log.ts",
         "src/action/action.ts",
         "src/action/receipts.ts",
+        "src/action/policy.ts",
         "src/action/http.ts",
         "src/action/mcp.ts",
         "src/action/atoms.ts",

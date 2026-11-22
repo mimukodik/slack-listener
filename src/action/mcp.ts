@@ -5,34 +5,36 @@
 // "return"): the error-mapping rule's MCP form (action.ts). A query is marked
 // read-only.
 //
-// The caller travels as a credential the MCP side supplies: the
+// The caller travels as a bearer to the hub, which the MCP side supplies: the
 // Authorization header on the HTTP transport, else the request's _meta
 // field named below, which an in-process or stdio client sets per request.
-// The Authentication middleware resolves it through Callers, the same
-// service REST uses, and never refuses by itself: invoke does.
+// The Authentication middleware resolves it to a principal through
+// Principals, the same service REST uses, and never refuses by itself:
+// invoke does. Past the middleware only the principal travels.
 import { Effect, Layer, Schema } from "effect";
 import { McpServer, Tool, Toolkit } from "effect/ai";
 
 import {
   type AnyAction,
-  Callers,
-  CurrentCaller,
+  CurrentPrincipal,
   invokeDecoded,
+  type Policy,
+  Principals,
 } from "./action.ts";
 
-export const credentialMetaKey = "mimukodik.action/credential";
+export const bearerMetaKey = "mimukodik.action/bearer";
 
 const bearerPrefix = "Bearer ";
 
-// The credential of one MCP request, from where the transport put it.
-export function credentialOf(
+// The bearer of one MCP request, from where the transport put it.
+export function bearerOf(
   headers: Readonly<Record<string, string | undefined>>,
   metadata: Readonly<Record<string, unknown>> | undefined,
 ): string {
   const authorization = headers["authorization"];
   if (authorization?.startsWith(bearerPrefix) === true)
     return authorization.slice(bearerPrefix.length);
-  const fromMeta = metadata?.[credentialMetaKey];
+  const fromMeta = metadata?.[bearerMetaKey];
   return typeof fromMeta === "string" ? fromMeta : "";
 }
 
@@ -45,7 +47,7 @@ function toolOf(action: AnyAction<unknown>) {
     success: action.success,
     failure: Schema.Union([first, ...rest]),
     failureMode: "return",
-    dependencies: [CurrentCaller],
+    dependencies: [CurrentPrincipal],
   })
     .annotate(Tool.Readonly, action.kind === "query")
     .annotate(Tool.Destructive, false);
@@ -58,14 +60,14 @@ export function toolkitOf(actions: ReadonlyArray<AnyAction<unknown>>) {
 export type ActionToolkit = ReturnType<typeof toolkitOf>;
 
 export const Authentication = McpServer.middleware<{
-  provides: CurrentCaller;
+  provides: CurrentPrincipal;
 }>()(
   Effect.gen(function* () {
-    const callers = yield* Callers;
+    const principals = yield* Principals;
     return (effect, { headers, requestContext }) =>
-      Effect.provideService(effect, CurrentCaller, {
-        caller: callers.authenticate(
-          credentialOf(headers, requestContext.requestMetadata),
+      Effect.provideService(effect, CurrentPrincipal, {
+        principal: principals.authenticate(
+          bearerOf(headers, requestContext.requestMetadata),
         ),
       });
   }),
@@ -81,18 +83,25 @@ export function registrationsOf<R>(
     Layer.provide(Authentication.layer),
     Layer.provide(
       toolkit.toLayer(
-        // The actions' own services (R) come from where the layer is built,
-        // since a tool handler may only ask for its declared dependencies.
+        // The Policy and the actions' own services (R) come from where the
+        // layer is built, since a tool handler may only ask for its declared
+        // dependencies; each handler runs on that context, not the
+        // request's (invokeDecoded).
         Effect.gen(function* () {
-          const services = yield* Effect.context<R>();
+          const services = yield* Effect.context<R | Policy>();
           return Object.fromEntries(
             actions.map((action) => [
               action.name,
               (params: unknown) =>
                 Effect.gen(function* () {
-                  const { caller } = yield* CurrentCaller;
-                  return yield* invokeDecoded(action, caller, params);
-                }).pipe(Effect.provideContext(services)),
+                  const { principal } = yield* CurrentPrincipal;
+                  return yield* invokeDecoded(
+                    action,
+                    principal,
+                    params,
+                    services,
+                  );
+                }),
             ]),
           );
         }),

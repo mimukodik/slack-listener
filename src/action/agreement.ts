@@ -7,10 +7,10 @@ import { Context, Effect, Scheduler } from "effect";
 
 import { host, withTripwire } from "../sim/host.ts";
 import { type Limits, SimRuntime } from "../sim/runtime.ts";
-import { type Callers, provideAction } from "./action.ts";
+import { type Policy, type Principals, provideAction } from "./action.ts";
 import {
   type Call,
-  callersLayer,
+  platformLayer,
   makeWorld,
   type Observation,
   type Surface,
@@ -43,7 +43,7 @@ export function runSequence(
   calls: readonly Call[],
   through: Surface | "chosen",
   options: WorldOptions = {},
-): Effect.Effect<Run, never, Callers> {
+): Effect.Effect<Run, never, Principals | Policy> {
   return Effect.scoped(
     Effect.gen(function* () {
       const store = makeStore(events);
@@ -68,7 +68,7 @@ export function runSequence(
 export function runAgreement(
   calls: readonly Call[],
   options: WorldOptions = {},
-): Effect.Effect<Agreement, never, Callers> {
+): Effect.Effect<Agreement, never, Principals | Policy> {
   return Effect.gen(function* () {
     const chosen = yield* runSequence(calls, "chosen", options);
     const rest = yield* runSequence(calls, "rest", options);
@@ -99,7 +99,7 @@ export function disagreement(
       const expected = reference.observations[index];
       const actual = run.observations[index];
       if (!same(actual, expected))
-        return `call ${index} (${call.action} ${JSON.stringify(call.input)} as "${call.credential}", ${name === "chosen" ? call.surface : name}): ${JSON.stringify(actual)}, direct gave ${JSON.stringify(expected)}`;
+        return `call ${index} (${call.action} ${JSON.stringify(call.input)} as "${call.bearer}", ${name === "chosen" ? call.surface : name}): ${JSON.stringify(actual)}, direct gave ${JSON.stringify(expected)}`;
     }
     if (!same(run.snapshot, reference.snapshot))
       return `${name}: store ended ${JSON.stringify(run.snapshot)}, direct ${JSON.stringify(reference.snapshot)}`;
@@ -162,7 +162,7 @@ export async function runSimulated(
         result.agreement = agreement;
       }),
     ),
-    Effect.provide(callersLayer),
+    Effect.provide(platformLayer),
     withFixedBudget,
   );
   const { value, tripped } = await withTripwire(async () => {

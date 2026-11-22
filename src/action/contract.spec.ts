@@ -9,7 +9,7 @@ import { Context, Effect, Schema } from "effect";
 import { McpProtocol, McpTest } from "effect/ai";
 
 import { type AnyAction, provideAction } from "./action.ts";
-import { callersLayer, makeWorld } from "./harness.ts";
+import { platformLayer, makeWorld } from "./harness.ts";
 import { apiOf, openApiOf } from "./http.ts";
 import { registrationsOf, toolkitOf } from "./mcp.ts";
 import {
@@ -192,7 +192,7 @@ describe("the OpenAPI document", () => {
 
   it("is enough to call an endpoint: a client built from the document alone", async () => {
     // Everything below comes from the document: path, method, where the
-    // input goes, how the credential travels, what a success looks like.
+    // input goes, how the bearer travels, what a success looks like.
     const operation = record(at(document, "paths", "/getReceipt", "get"));
     const [parameter] = list(operation["parameters"]).map(record);
     if (parameter === undefined) throw new Error("no parameter");
@@ -224,7 +224,7 @@ describe("the OpenAPI document", () => {
           const text = yield* Effect.promise(async () => response.text());
           return { status: response.status, body: JSON.parse(text) as unknown };
         }),
-      ).pipe(Effect.provide(callersLayer)),
+      ).pipe(Effect.provide(platformLayer)),
     );
     expect(status).toBe(200);
     // The body has exactly the documented fields, and the definition's
@@ -248,7 +248,7 @@ describe("the MCP tool list", () => {
           );
           return yield* client.listTools({});
         }),
-      ).pipe(Effect.provide(callersLayer), Effect.orDie),
+      ).pipe(Effect.provide(platformLayer), Effect.orDie),
     );
     expect(listed.tools.map((tool) => tool.name).sort()).toEqual(
       actions.map((action) => action.name).sort(),

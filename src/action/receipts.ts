@@ -1,16 +1,16 @@
 // The example that drives the contract: two actions over an in-memory store.
 // getReceipt reads the caller's receipt for an event; acknowledge records
-// one, idempotently per (caller, event). Storage is a later slice, so the
+// one, idempotently per (principal, event). Storage is a later slice, so the
 // store is a map behind one service, its only writer.
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { type Caller, defineAction } from "./action.ts";
+import { defineAction } from "./action.ts";
 
 export const EventId = Schema.String.check(Schema.isPattern(/^E[0-9]{1,6}$/u));
 
 export const Receipt = Schema.Struct({
   eventId: Schema.String,
-  callerId: Schema.String,
+  principal: Schema.String,
   // The store's count of receipts when this one was recorded: an order that
   // needs no clock.
   number: Schema.Int,
@@ -35,18 +35,18 @@ export class ReceiptStore extends Context.Service<
   {
     readonly find: (
       eventId: string,
-      callerId: string,
+      principal: string,
     ) => Effect.Effect<Receipt | null, UnknownEvent>;
     readonly record: (
       eventId: string,
-      callerId: string,
+      principal: string,
     ) => Effect.Effect<Receipt, UnknownEvent>;
     readonly snapshot: Effect.Effect<Snapshot>;
   }
 >()("action/ReceiptStore") {}
 
-function key(eventId: string, callerId: string): string {
-  return `${eventId}\u0000${callerId}`;
+function key(eventId: string, principal: string): string {
+  return `${eventId}\u0000${principal}`;
 }
 
 export function makeStore(events: readonly string[]): ReceiptStore["Service"] {
@@ -55,17 +55,17 @@ export function makeStore(events: readonly string[]): ReceiptStore["Service"] {
   const unknown = (eventId: string) =>
     new UnknownEvent({ message: `no event ${eventId}`, eventId });
   return {
-    find: (eventId, callerId) =>
+    find: (eventId, principal) =>
       known.has(eventId)
-        ? Effect.succeed(receipts.get(key(eventId, callerId)) ?? null)
+        ? Effect.succeed(receipts.get(key(eventId, principal)) ?? null)
         : Effect.fail(unknown(eventId)),
-    record: (eventId, callerId) =>
+    record: (eventId, principal) =>
       Effect.suspend(() => {
         if (!known.has(eventId)) return Effect.fail(unknown(eventId));
-        const existing = receipts.get(key(eventId, callerId));
+        const existing = receipts.get(key(eventId, principal));
         if (existing !== undefined) return Effect.succeed(existing);
-        const receipt = { eventId, callerId, number: receipts.size + 1 };
-        receipts.set(key(eventId, callerId), receipt);
+        const receipt = { eventId, principal, number: receipts.size + 1 };
+        receipts.set(key(eventId, principal), receipt);
         return Effect.succeed(receipt);
       }),
     snapshot: Effect.sync(() => ({
@@ -78,8 +78,11 @@ export function makeStore(events: readonly string[]): ReceiptStore["Service"] {
 export const storeLayer = (store: ReceiptStore["Service"]) =>
   Layer.succeed(ReceiptStore)(store);
 
-const canRead = (caller: Caller): boolean =>
-  caller.role === "member" || caller.role === "reader";
+// The permissions the actions name; a Policy grants them to principals.
+export const permissions = {
+  read: "receipts.read",
+  acknowledge: "receipts.acknowledge",
+} as const;
 
 export const getReceipt = defineAction({
   name: "getReceipt",
@@ -92,11 +95,11 @@ export const getReceipt = defineAction({
     receipt: Schema.NullOr(Receipt),
   }),
   errors: [UnknownEvent],
-  allow: (caller) => canRead(caller),
-  handler: ({ eventId }, caller) =>
+  permission: permissions.read,
+  handler: ({ eventId }, principal) =>
     Effect.gen(function* () {
       const store = yield* ReceiptStore;
-      const receipt = yield* store.find(eventId, caller.id);
+      const receipt = yield* store.find(eventId, principal);
       return { eventId, receipt };
     }),
 });
@@ -109,10 +112,10 @@ export const acknowledge = defineAction({
   input: { eventId: EventId },
   success: Receipt,
   errors: [UnknownEvent],
-  allow: (caller) => caller.role === "member",
-  handler: ({ eventId }, caller) =>
+  permission: permissions.acknowledge,
+  handler: ({ eventId }, principal) =>
     Effect.gen(function* () {
       const store = yield* ReceiptStore;
-      return yield* store.record(eventId, caller.id);
+      return yield* store.record(eventId, principal);
     }),
 });

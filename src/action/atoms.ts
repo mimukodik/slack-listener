@@ -3,8 +3,8 @@
 // an outside REST client calls. A query action is a query atom, a mutation
 // action a mutation atom; nothing is rendered here.
 //
-// The caller travels as the HTTP client's credential: one atom client per
-// credential, whose client side of Authentication sets the bearer token on
+// The caller travels as the HTTP client's bearer to the hub: one atom client
+// per bearer, whose client side of Authentication sets the bearer token on
 // every request, as a signed-in UI does. A refusal comes back from the server
 // and the client decodes it with the same error schema, so it is the atom's
 // typed failure.
@@ -26,20 +26,20 @@ export function atomClientOf(
   api: Api,
   options: {
     readonly id: string;
-    readonly credential: string;
+    readonly bearer: string;
     readonly fetch: Fetch;
   },
 ) {
-  const credential = HttpApiMiddleware.layerClient(
+  const authentication = HttpApiMiddleware.layerClient(
     Authentication,
     ({ next, request }) =>
-      next(HttpClientRequest.bearerToken(request, options.credential)),
+      next(HttpClientRequest.bearerToken(request, options.bearer)),
   );
   return AtomHttpApi.Service<unknown>()(options.id, {
     api,
     baseUrl,
     httpClient: Layer.mergeAll(
-      credential,
+      authentication,
       FetchHttpClient.layer.pipe(
         Layer.provide(Layer.succeed(FetchHttpClient.Fetch)(options.fetch)),
       ),

@@ -23,12 +23,13 @@ import { AtomRegistry } from "effect/reactivity";
 
 import {
   type AnyAction,
-  type Caller,
-  Callers,
+  type Policy,
+  type Principal,
+  Principals,
   type ErrorSchema,
   type Fields,
   type InputOf,
-  invoke,
+  invokeDecoded,
 } from "./action.ts";
 import {
   type AtomClient,
@@ -38,7 +39,9 @@ import {
   reactivityKeys,
 } from "./atoms.ts";
 import { apiOf, serverLayer } from "./http.ts";
-import { credentialMetaKey, registrationsOf, toolkitOf } from "./mcp.ts";
+import { bearerMetaKey, registrationsOf, toolkitOf } from "./mcp.ts";
+import { inMemoryPolicy } from "./policy.ts";
+import { permissions } from "./receipts.ts";
 
 export const surfaces = ["rest", "mcp", "atom", "direct"] as const;
 export type Surface = (typeof surfaces)[number];
@@ -54,8 +57,8 @@ export type Observation =
 export type Call = {
   readonly action: string;
   readonly input: InputOf<Fields>;
-  // Empty for no credential at all.
-  readonly credential: string;
+  // The bearer the client sends to the hub; empty for none at all.
+  readonly bearer: string;
   readonly surface: Surface;
 };
 
@@ -67,16 +70,24 @@ export type World = {
   readonly requests: () => number;
 };
 
-// The callers of the example world, by credential. "t-nobody" is a
-// credential no caller has.
-export const testCallers: Readonly<Record<string, Caller>> = {
-  "t-alice": { id: "alice", role: "member" },
-  "t-carol": { id: "carol", role: "member" },
-  "t-bob": { id: "bob", role: "reader" },
-  "t-eve": { id: "eve", role: "outsider" },
+// The principals of the example world, by bearer, named as iron-control
+// names them: two Slack users who may read and acknowledge, a channel that
+// may only read, and a user with no grant. "t-nobody" is a bearer no
+// principal has. The ids are placeholders.
+export const testPrincipals: Readonly<Record<string, Principal>> = {
+  "t-alice": "slack-user-T0000-U0001",
+  "t-carol": "slack-user-T0000-U0002",
+  "t-bob": "slack-channel-C0001",
+  "t-eve": "slack-user-T0000-U0009",
 };
 
-export const credentials = [
+export const testGrants = {
+  "slack-user-T0000-U0001": [permissions.read, permissions.acknowledge],
+  "slack-user-T0000-U0002": [permissions.read, permissions.acknowledge],
+  "slack-channel-C0001": [permissions.read],
+};
+
+export const bearers = [
   "t-alice",
   "t-carol",
   "t-bob",
@@ -85,9 +96,15 @@ export const credentials = [
   "",
 ] as const;
 
-export const callersLayer = Layer.succeed(Callers)({
-  authenticate: (credential) => testCallers[credential],
+// The platform a world runs on: who a bearer is, and what they may do.
+export const principalsLayer = Layer.succeed(Principals)({
+  authenticate: (bearer) => testPrincipals[bearer],
 });
+
+export const platformLayer = Layer.merge(
+  principalsLayer,
+  inMemoryPolicy(testGrants),
+);
 
 // The MCP tool text for a failure that is not a declared error.
 const invalid: Observation = { kind: "invalid" };
@@ -225,8 +242,7 @@ function fromMcp(
 
 function restRequest(action: AnyAction<unknown>, call: Call): Request {
   const headers = new Headers({ "content-type": "application/json" });
-  if (call.credential !== "")
-    headers.set("authorization", `Bearer ${call.credential}`);
+  if (call.bearer !== "") headers.set("authorization", `Bearer ${call.bearer}`);
   const url = new URL(`http://actions.invalid/${action.name}`);
   if (action.kind === "mutation")
     return new Request(url, {
@@ -251,7 +267,7 @@ export type WorldOptions = {
 };
 
 // Builds a world for these actions, their services already provided, in the
-// current scope. The callers come from Callers in the builder's context.
+// current scope. Principals and the Policy come from the builder's context.
 export function makeWorld(
   actions: ReadonlyArray<AnyAction>,
   options: WorldOptions = {},
@@ -262,8 +278,8 @@ export function makeWorld(
     const codecs = new Map(
       actions.map((action) => [action.name, codecsOf(action)]),
     );
-    const builder = yield* Effect.context<Callers>();
-    const callers = yield* Callers;
+    const builder = yield* Effect.context<Principals | Policy>();
+    const principals = yield* Principals;
 
     // REST: the server's handler over the builder's context, behind fetch.
     const api = apiOf("actions", actions);
@@ -271,8 +287,8 @@ export function makeWorld(
       serverLayer(api, actions).pipe(Layer.provide(HttpServer.layerServices)),
     );
     const handler = HttpEffect.toWebHandlerWith<
-      Callers,
-      HttpServerRequest.HttpServerRequest | Scope.Scope
+      Principals | Policy,
+      HttpServerRequest.HttpServerRequest | Scope.Scope | Policy
     >(builder)(handlerEffect);
     let requests = 0;
     const fetch: Fetch = Object.assign(
@@ -290,14 +306,14 @@ export function makeWorld(
       },
     );
 
-    // MCP: one in-memory client; the credential travels per request.
+    // MCP: one in-memory client; the bearer travels per request.
     const mcp = yield* McpTest.makeClient(
       registrationsOf(toolkitOf(actions), actions),
       { protocols: [McpProtocol.v2026_07_28] },
       // The only failure is a protocol version the server lacks: a bug here.
     ).pipe(Effect.orDie);
 
-    // Atoms: one client per credential, one registry, whose tasks run on the
+    // Atoms: one client per bearer, one registry, whose tasks run on the
     // builder's scheduler.
     const scheduler = yield* Scheduler.Scheduler;
     const dispatcher = scheduler.makeDispatcher();
@@ -309,15 +325,15 @@ export function makeWorld(
     });
     yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
     const atomClients = new Map<string, AtomClient>();
-    const atomClient = (credential: string): AtomClient => {
-      const existing = atomClients.get(credential);
+    const atomClient = (bearer: string): AtomClient => {
+      const existing = atomClients.get(bearer);
       if (existing !== undefined) return existing;
       const client = atomClientOf(api, {
         id: `action/atoms/${atomClients.size}`,
-        credential,
+        bearer,
         fetch,
       });
-      atomClients.set(credential, client);
+      atomClients.set(bearer, client);
       return client;
     };
 
@@ -335,9 +351,9 @@ export function makeWorld(
               input.input,
             );
             if (Exit.isFailure(decoded)) return invalid;
-            const caller = callers.authenticate(input.credential);
+            const principal = principals.authenticate(input.bearer);
             const exit = yield* Effect.exit(
-              invoke(action, caller, decoded.value),
+              invokeDecoded(action, principal, decoded.value, builder),
             );
             return fromExit(codec, exit, false);
           }
@@ -352,14 +368,14 @@ export function makeWorld(
             const result = yield* mcp.callTool({
               name: action.name,
               arguments: input.input,
-              _meta: { [credentialMetaKey]: input.credential },
+              _meta: { [bearerMetaKey]: input.bearer },
             });
             return fromMcp(codec, result);
           }
           case "atom": {
             const before = requests;
             const target = atomOf(
-              atomClient(input.credential),
+              atomClient(input.bearer),
               action,
               input.input,
             );

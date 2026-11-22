@@ -11,7 +11,7 @@ import { host, withTripwire } from "../sim/host.ts";
 import { SimRuntime } from "../sim/runtime.ts";
 import { provideAction } from "./action.ts";
 import { withFixedBudget } from "./agreement.ts";
-import { callersLayer } from "./harness.ts";
+import { platformLayer } from "./harness.ts";
 import { registrationsOf, toolkitOf } from "./mcp.ts";
 import {
   acknowledge,
@@ -93,7 +93,7 @@ describe("Effect 4.1.4 under a yield budget of one", () => {
             yield* client.ping;
           }),
         );
-    }).pipe(Effect.orDie, Effect.provide(callersLayer));
+    }).pipe(Effect.orDie, Effect.provide(platformLayer));
     const outcome = async (program: Effect.Effect<void>) => {
       const runtime = new SimRuntime(216);
       const { value, tripped } = await withTripwire(async () => {

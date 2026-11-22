@@ -5,11 +5,12 @@
 // every failure the contract allows it, with the status the error-mapping
 // rule gives each one (action.ts).
 //
-// The caller travels as a bearer token. The Authentication middleware turns
-// it into a CurrentCaller through Callers, the same service MCP uses, and
-// never refuses by itself: invoke refuses a missing caller, the same way on
-// every surface.
-import { Effect, Layer, Redacted } from "effect";
+// The caller travels as a bearer token to the hub. The Authentication
+// middleware turns it into a CurrentPrincipal through Principals, the same
+// service MCP uses, and never refuses by itself: invoke refuses a missing
+// principal, the same way on every surface. Past the middleware only the
+// principal travels.
+import { type Context, Effect, Layer, Redacted } from "effect";
 import {
   HttpApi,
   HttpApiBuilder,
@@ -22,16 +23,17 @@ import {
 
 import {
   type AnyAction,
-  Callers,
-  CurrentCaller,
+  Principals,
+  CurrentPrincipal,
   invokeDecoded,
+  type Policy,
 } from "./action.ts";
 
 export const groupName = "actions";
 
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
-  { provides: CurrentCaller }
+  { provides: CurrentPrincipal }
 >()("action/Authentication", {
   requiredForClient: true,
   security: { bearer: HttpApiSecurity.bearer },
@@ -73,41 +75,50 @@ export function apiOf(
 
 export type Api = ReturnType<typeof apiOf>;
 
-// The handlers for every action of an API, each through invoke, with the
-// caller the Authentication middleware resolved.
+// The handler for one action: through invoke, with the principal the
+// Authentication middleware resolved, on the context the handlers were built
+// with, not the request's (invokeDecoded).
+function handlerOf<R>(
+  action: AnyAction<R>,
+  services: Context.Context<R | Policy>,
+) {
+  return ({ payload }: { readonly payload: unknown }) =>
+    Effect.gen(function* () {
+      const { principal } = yield* CurrentPrincipal;
+      return yield* invokeDecoded(action, principal, payload, services);
+    });
+}
+
+// The handlers for every action of an API.
 export function handlersOf<R>(api: Api, actions: ReadonlyArray<AnyAction<R>>) {
   return HttpApiBuilder.group(api, groupName, (handlers) =>
-    handlers.handleAll(
-      Object.fromEntries(
-        actions.map((action) => [
-          action.name,
-          ({ payload }: { readonly payload: unknown }) =>
-            Effect.gen(function* () {
-              const { caller } = yield* CurrentCaller;
-              return yield* invokeDecoded(action, caller, payload);
-            }),
-        ]),
-      ),
-    ),
+    Effect.gen(function* () {
+      const services = yield* Effect.context<R | Policy>();
+      return handlers.handleAll(
+        Object.fromEntries(
+          actions.map((action) => [action.name, handlerOf(action, services)]),
+        ),
+      );
+    }),
   );
 }
 
-// The server side of Authentication: the bearer token, through Callers, to
-// the caller for this request, or none.
+// The server side of Authentication: the bearer token, through Principals, to
+// the principal for this request, or none.
 export const authenticationLayer = Layer.effect(Authentication)(
   Effect.gen(function* () {
-    const callers = yield* Callers;
+    const principals = yield* Principals;
     return Authentication.of({
       bearer: (httpEffect, { credential }) =>
-        Effect.provideService(httpEffect, CurrentCaller, {
-          caller: callers.authenticate(Redacted.value(credential)),
+        Effect.provideService(httpEffect, CurrentPrincipal, {
+          principal: principals.authenticate(Redacted.value(credential)),
         }),
     });
   }),
 );
 
 // Everything a server needs for these actions, short of the platform
-// services and the actions' own requirements (R).
+// services, Principals, the Policy and the actions' own requirements (R).
 export function serverLayer<R>(api: Api, actions: ReadonlyArray<AnyAction<R>>) {
   return HttpApiBuilder.layer(api).pipe(
     Layer.provide(handlersOf(api, actions)),
