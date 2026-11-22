@@ -20,7 +20,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Effect, Exit, Layer, Scope } from "effect";
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
+import { Context, Effect, Exit, Layer, Scope } from "effect";
+import { SqlClient, type SqlError } from "effect/sql";
 
 import { withFixedBudget } from "../../action/agreement.ts";
 import {
@@ -32,13 +34,7 @@ import {
 import { host, withTripwire } from "../../sim/host.ts";
 import { SimRuntime } from "../../sim/runtime.ts";
 import { hubActionsOver, hubPlatformLayer, hubPrincipals } from "../fixture.ts";
-import {
-  canonical,
-  type Snapshot,
-  sqliteStoreLayer,
-  type WritePoint,
-  WritePoints,
-} from "../store.ts";
+import { canonical, type Snapshot, storeLayer, TaskStore } from "../store.ts";
 import { type Expected, type Input, Model, ruleFault } from "./model.ts";
 
 export type HubCoverage = {
@@ -88,12 +84,22 @@ const outsiders = ["h-chan", "h-eve", "h-nobody"] as const;
 const crashesMax = 4;
 const startMs = 1_794_900_000_000;
 const answerMsMax = 20;
-const inTransaction: readonly WritePoint[] = [
-  "begun",
-  "evented",
-  "projected",
-  "recorded",
-];
+// Where a crash lands: before a statement inside a write transaction,
+// before one outside, or at a seeded time.
+type CrashPoint = "transaction" | "statement" | "timer";
+
+// A statement runs on the client's own connection and needs no service.
+function isStatement(
+  value: unknown,
+): value is Effect.Effect<unknown, SqlError.SqlError> {
+  return Effect.isEffect(value);
+}
+
+// The store the checker reads the world's state through.
+class CheckerStore extends Context.Service<
+  CheckerStore,
+  TaskStore["Service"]
+>()("hub/sim/CheckerStore") {}
 
 type Step = { readonly call: Call };
 type InFlight = {
@@ -102,6 +108,7 @@ type InFlight = {
   readonly after: Model;
   readonly expected: Expected;
   readonly repeat: boolean;
+  readonly keyUsed: boolean;
 };
 
 const observed = (
@@ -122,8 +129,8 @@ const observed = (
 };
 
 // The rule a wrong answer to this call breaks.
-function ruleOf(action: string, repeat: boolean): string {
-  if (repeat) return "T6";
+function ruleOf(action: string, keyUsed: boolean): string {
+  if (keyUsed) return "T6";
   if (action === "taskAnswer") return "T5";
   if (action === "taskEvents") return "T4";
   if (
@@ -183,7 +190,7 @@ class Driver {
     const before =
       again && this.inFlight !== undefined ? this.inFlight.before : this.model;
     const after = before.clone();
-    const repeat = after.repeats(
+    const use = after.keyUse(
       step.call.bearer,
       step.call.action,
       step.call.input,
@@ -194,7 +201,14 @@ class Driver {
       step.call.input,
       now,
     );
-    this.inFlight = { step, before, after, expected, repeat };
+    this.inFlight = {
+      step,
+      before,
+      after,
+      expected,
+      repeat: use === "repeat",
+      keyUsed: use !== "new",
+    };
     return step;
   }
 
@@ -208,12 +222,12 @@ class Driver {
     const { call } = flight.step;
     const wrong = observed(flight.expected, actual);
     if (wrong !== undefined) {
-      this.failure = `${ruleOf(call.action, flight.repeat)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
+      this.failure = `${ruleOf(call.action, flight.keyUsed)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
       return;
     }
     this.count(flight, actual);
     this.model = flight.after;
-    this.check(snapshot, flight.repeat ? "T6" : "T1");
+    this.check(snapshot, flight.keyUsed ? "T6" : "T1");
   }
 
   private count(flight: InFlight, actual: Observation): void {
@@ -251,10 +265,9 @@ class Driver {
       this.failure = `${rule}: the store differs from the model: ${canonical(snapshot.events.slice(-3))}, the model ${canonical(this.model.events.slice(-3))}`;
   }
 
-  crashed(where: WritePoint | "timer"): void {
+  crashed(where: CrashPoint): void {
     this.coverage.crashes += 1;
-    if (inTransaction.includes(where as WritePoint))
-      this.coverage.crashesInTransaction += 1;
+    if (where === "transaction") this.coverage.crashesInTransaction += 1;
   }
 
   // A restarted process's first look at the store: as of the last commit,
@@ -479,9 +492,9 @@ export async function runHubSimulation(options: {
   // Connections live in the world's scope: a crashed process abandons its
   // own, and they close only when the run ends.
   const connections = Effect.runSync(Scope.make());
-  const state = { file: disk.fresh() };
+  const state = { file: disk.fresh(), crashing: false };
 
-  const restart = (where: WritePoint | "timer") => {
+  const restart = (where: CrashPoint) => {
     runtime.crash();
     driver.crashed(where);
     state.file = disk.copy(state.file);
@@ -493,7 +506,7 @@ export async function runHubSimulation(options: {
     runtime.at(
       runtime.choices.int(options.steps * 150) + 1,
       () => {
-        if (!driver.crashable) return;
+        if (!driver.crashable || state.crashing) return;
         restart("timer");
         crashTimer();
       },
@@ -501,14 +514,63 @@ export async function runHubSimulation(options: {
     );
   };
 
-  const points = {
-    reached: (point: WritePoint) =>
-      Effect.suspend(() => {
-        if (!driver.crashable || runtime.choices.int(100) >= 3)
+  // The process's SQL client, with a seeded crash before any statement the
+  // store runs; BEGIN and COMMIT belong to the client and are not hooked.
+  const crashing = Layer.effect(SqlClient.SqlClient)(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // The statement's fiber stops here for good, and the crash itself is
+      // a world timer due at once: a fiber may run inside the host's drain,
+      // where a crash would let the rest of the drain schedule timers for
+      // the dead process. Until the timer fires nothing else writes: the
+      // fiber holds the connection.
+      const point = Effect.withFiber((fiber) => {
+        if (
+          !driver.crashable ||
+          state.crashing ||
+          runtime.choices.int(1000) >= 5
+        )
           return Effect.void;
-        restart(point);
+        const open = Context.getOrUndefined(
+          fiber.context,
+          sql.transactionService,
+        );
+        state.crashing = true;
+        runtime.at(
+          0,
+          () => {
+            state.crashing = false;
+            restart(open === undefined ? "statement" : "transaction");
+          },
+          "world",
+        );
         return Effect.never;
+      });
+      return new Proxy(sql, {
+        apply: (target, self, args: unknown[]) => {
+          // A tagged template is a statement, an Effect on the client's own
+          // connection; anything else (an identifier, a fragment) passes.
+          const statement: unknown = Reflect.apply(target, self, args);
+          const template = Array.isArray(args[0]) && "raw" in args[0];
+          return template && isStatement(statement)
+            ? Effect.andThen(point, statement)
+            : statement;
+        },
+      });
+    }),
+  );
+
+  const storesOn = (file: string) => {
+    const client = SqliteClient.layer({ filename: file });
+    // The checker reads through a store of its own, which never crashes.
+    const checker = Layer.effect(CheckerStore)(
+      Effect.gen(function* () {
+        return yield* TaskStore;
       }),
+    ).pipe(Layer.provide(storeLayer));
+    return Layer.merge(storeLayer.pipe(Layer.provide(crashing)), checker).pipe(
+      Layer.provide(client),
+    );
   };
 
   const processOn = (file: string, again: boolean) =>
@@ -517,12 +579,14 @@ export async function runHubSimulation(options: {
       // the process; nothing that may crash runs in it.
       yield* Effect.yieldNow;
       const store = yield* Layer.buildWithScope(
-        sqliteStoreLayer(file),
+        storesOn(file),
         connections,
       ).pipe(Effect.orDie);
+      const checker = Context.get(store, CheckerStore);
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const { actions, snapshot } = yield* hubActionsOver.pipe(
+          const { snapshot } = checker;
+          const { actions } = yield* hubActionsOver.pipe(
             Effect.provideContext(store),
           );
           const world = yield* makeWorld(actions, {
@@ -543,11 +607,7 @@ export async function runHubSimulation(options: {
           }
         }),
       );
-    }).pipe(
-      Effect.provide(hubPlatformLayer),
-      Effect.provideService(WritePoints, points),
-      withFixedBudget,
-    );
+    }).pipe(Effect.provide(hubPlatformLayer), withFixedBudget);
 
   try {
     const { value, tripped } = await withTripwire(async () => {

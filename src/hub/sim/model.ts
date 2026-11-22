@@ -55,12 +55,19 @@ export class Model {
     return copy;
   }
 
-  // Whether a key was already answered for this exact input.
-  repeats(bearer: string, action: string, input: Input): boolean {
+  // Whether a key was answered before, for this input or another.
+  keyUse(
+    bearer: string,
+    action: string,
+    input: Input,
+  ): "new" | "repeat" | "reuse" {
     const principal = hubPrincipals[bearer];
-    if (principal === undefined || !("requestKey" in input)) return false;
+    if (principal === undefined || !("requestKey" in input)) return "new";
     const prior = this.requests.get(`${principal} ${str(input, "requestKey")}`);
-    return prior?.fingerprint === fingerprintOf(action, input);
+    if (prior === undefined) return "new";
+    return prior.fingerprint === fingerprintOf(action, input)
+      ? "repeat"
+      : "reuse";
   }
 
   // One call, as the hub must answer it at now; the model moves with it.

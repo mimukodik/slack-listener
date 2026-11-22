@@ -209,8 +209,6 @@ export type Rule = {
   readonly lease: Lease;
   readonly to: Next;
   readonly change: Change["_tag"];
-  // The refusals the rule can give, beyond a missing task.
-  readonly refusals: ReadonlyArray<Refusal["_tag"]>;
 };
 
 // The task lifecycle, in one table. Nothing else moves a task between
@@ -223,7 +221,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "free",
     to: "working",
     change: "claimed",
-    refusals: ["WrongState"],
   },
   renew: {
     from: ["working"],
@@ -231,7 +228,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "held",
     to: "same",
     change: "renewed",
-    refusals: ["WrongState", "LeaseNotHeld"],
   },
   requestInput: {
     from: ["working"],
@@ -239,7 +235,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "held",
     to: "input-required",
     change: "inputRequested",
-    refusals: ["WrongState", "LeaseNotHeld"],
   },
   answer: {
     from: ["input-required"],
@@ -247,7 +242,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "any",
     to: "working",
     change: "answered",
-    refusals: ["WrongState", "NotWaitingOnYou", "NotAnOption"],
   },
   amend: {
     from: openStates,
@@ -255,7 +249,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "any",
     to: "same",
     change: "amended",
-    refusals: ["WrongState", "NotCreator"],
   },
   cancel: {
     from: openStates,
@@ -263,7 +256,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "any",
     to: "canceled",
     change: "canceled",
-    refusals: ["WrongState", "NotCreator"],
   },
   complete: {
     from: ["working"],
@@ -271,7 +263,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "held",
     to: "completed",
     change: "completed",
-    refusals: ["WrongState", "LeaseNotHeld"],
   },
   fail: {
     from: ["working"],
@@ -279,7 +270,6 @@ export const transitions: { readonly [Tag in CommandTag]: Rule } = {
     lease: "held",
     to: "failed",
     change: "failed",
-    refusals: ["WrongState", "LeaseNotHeld"],
   },
 };
 

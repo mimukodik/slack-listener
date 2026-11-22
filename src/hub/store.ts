@@ -1,4 +1,3 @@
-import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 // The task hub's store: events, the tasks projected from them, and the
 // answers given per request key, over effect/sql (DECISIONS.md, 2026-11-22:
 // the task hub). Every mutation is one write transaction that looks up the
@@ -10,6 +9,7 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 // from Effect's Clock, and nothing else of the world. The SQL is portable
 // except the table definitions, which a Postgres Layer would bring in its own
 // dialect.
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Clock, Context, Effect, Layer, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -69,18 +69,6 @@ export type Snapshot = {
   readonly events: readonly Event[];
   readonly requests: readonly string[];
 };
-
-// Where a mutation is inside its write: the simulator may crash the process
-// at any of them. Nothing listens by default.
-export type WritePoint =
-  | "begun"
-  | "evented"
-  | "projected"
-  | "recorded"
-  | "committed";
-export const WritePoints = Context.Reference<{
-  readonly reached: (point: WritePoint) => Effect.Effect<void>;
-}>("hub/WritePoints", { defaultValue: () => ({ reached: () => Effect.void }) });
 
 export class TaskStore extends Context.Service<
   TaskStore,
@@ -143,12 +131,6 @@ const makeStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   for (const statement of schema) yield* sql.unsafe(statement);
 
-  const reached = (point: WritePoint) =>
-    Effect.gen(function* () {
-      const points = yield* WritePoints;
-      yield* points.reached(point);
-    });
-
   const taskRows = (rows: ReadonlyArray<unknown>) =>
     decodeBodyRows(rows).pipe(
       Effect.flatMap((decoded) =>
@@ -181,13 +163,11 @@ const makeStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const after = evolve(before, event);
       yield* sql`INSERT INTO hub_events (cursor, task_id, kind, actor, at, change) VALUES (${event.cursor}, ${event.taskId}, ${event.change._tag}, ${event.actor}, ${event.at}, ${Schema.encodeSync(changeJson)(event.change)})`;
-      yield* reached("evented");
       const body = Schema.encodeSync(taskJson)(after);
       if (before === undefined)
         yield* sql`INSERT INTO hub_tasks (id, seq, state, body) VALUES (${after.id}, ${event.cursor}, ${after.state}, ${body})`;
       else
         yield* sql`UPDATE hub_tasks SET state = ${after.state}, body = ${body} WHERE id = ${after.id}`;
-      yield* reached("projected");
       return { task: after, cursor: event.cursor };
     });
 
@@ -260,7 +240,6 @@ const makeStore = Effect.gen(function* () {
       const fingerprint = canonical(request);
       const answer = yield* sql.withTransaction(
         Effect.gen(function* () {
-          yield* reached("begun");
           const prior =
             yield* sql`SELECT request, answer FROM hub_requests WHERE principal = ${principal} AND request_key = ${requestKey}`.pipe(
               Effect.flatMap(decodeRequestRows),
@@ -272,11 +251,9 @@ const makeStore = Effect.gen(function* () {
               : undefined;
           const fresh = yield* apply(principal, request, now);
           yield* sql`INSERT INTO hub_requests (principal, request_key, request, answer) VALUES (${principal}, ${requestKey}, ${fingerprint}, ${Schema.encodeSync(answerJson)(fresh)})`;
-          yield* reached("recorded");
           return fresh;
         }),
       );
-      yield* reached("committed");
       if (answer === undefined)
         return yield* new RequestKeyReused({
           message: `request key ${requestKey} was used for another request`,
