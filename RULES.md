@@ -46,7 +46,9 @@ both directions; a person typing is the exception.
   from a named sender at a stated time. The tool never declares permission relay.
   In step 1 it never posts to Slack.
 - **R4. Order holds within a thread.** Two messages of one thread, and two top-level
-  messages, are delivered in the order of their `ts`.
+  messages, are delivered in the order of their `ts`. A message whose live event did
+  not decode (R20) and that a later catch-up finds may arrive after newer messages of
+  its thread.
 - **R5. Noise is not delivered.** Deletions, changes that leave the text the same
   (such as a parent's reply count), joins, leaves and topic changes are never
   delivered.
@@ -67,6 +69,8 @@ both directions; a person typing is the exception.
   instance runs or while it was disconnected or stopped (up to 24 hours back), is
   delivered once the instance is connected again and the session accepts writes.
   This includes replies in threads whose first message is up to 7 days old.
+  After a disconnect, live messages wait until the next catch-up ends, and what a
+  catch-up has gathered survives the disconnect.
 - **R8. The instance reconnects.** After any disconnect or failed connection attempt
   the instance tries again, with a wait that grows to at most 60 seconds, for as long
   as it runs.
@@ -88,15 +92,17 @@ both directions; a person typing is the exception.
 - **R18. A reaction says the message reached the session.** When a message is
   delivered under R10, the listener adds one reaction from the own bot to it
   (`:eyes:`, set in configuration). It means "handed to the session", not "read".
-  When a post of the own side appears in that message's thread (a top-level message's
-  thread starts at its own `ts`), or the session marks the message done, the listener
-  replaces its reaction with a second one (`:heavy_check_mark:`, set in
-  configuration): it adds the second, then removes the first. A message handled before
-  its delivery gets the second at once. The two must differ. Marking takes only the
+  When a post of the own side appears in that message's thread after the message (a
+  top-level message's thread starts at its own `ts`), or the session marks the
+  message done, the listener replaces its reaction with a second one
+  (`:heavy_check_mark:`, set in configuration): it adds the second, then removes the
+  first. A message handled before its delivery gets the second at once. The two must differ. Marking takes only the
   message's `ts`; it changes nothing but the own reactions on that message and sends no
   text. It never sets or removes anyone else's reaction. A failed reaction call never
   delays or drops a delivery; it is retried a bounded number of times and then given
-  up. Reactions carry no text.
+  up. When adding the second is given up, the first stays, so a delivered message
+  always carries one of the two. A done mark is saved before the session's call is
+  answered, and the reaction queue is saved after each call. Reactions carry no text.
 
 ## Malformed input, step 1
 
@@ -136,11 +142,13 @@ digits and a dot.
   holds a list of messages), one message that does not decode is skipped: it is
   logged with its `ts`, when that decodes, its field and what was expected, and
   not delivered. The rest of the page is read, so catch-up ends and the listener
-  goes live. Each later catch-up that reads the message skips it again. A thread
-  parent that does not decode still has its replies read, as long as its `ts`,
-  `reply_count` and `latest_reply` decode; when one of them does not, replies posted
-  in that thread while the listener was away are not delivered unless also sent to
-  the channel. A thread parent read alone for its quote is not a page; one that does
+  goes live. Each later catch-up that reads the message skips it again. A message
+  that decodes live but not in a catch-up's history is skipped there, and a resend of
+  its live event is dropped, so it is not delivered. A thread parent that does not
+  decode still has its replies read, as long as its `ts`, `reply_count` and
+  `latest_reply` decode; when one of them does not, replies posted in that thread
+  while the listener was away are not delivered unless also sent to the channel. A
+  thread parent read alone for its quote is not a page; one that does
   not decode is left out, as above.
 - **R22. A line from the session that does not decode is answered with the JSON-RPC
   error.** A line that is not JSON gets a parse error (-32700) with a null id. One
