@@ -113,7 +113,28 @@ Hogy a módszer mit adott és mibe került, és az első zöld futás óta minde
 | Héj: Socket Mode, MCP stdio, 1Password, zárolófájl | kész           | A `--check` ellenőrzi a bot tokent, a csatorna olvasását és a Socket Mode tokent.                                                                        |
 | Élő használat                                      | 2026-11-17 óta | Egy felső szintű poszt, egy szálbeli válasz és egy szerkesztés egyszer érkezett meg, 3–4 mp-cel a küldés után; a saját oldal ágensének posztjai kiestek. |
 | 2. lépés: a `reply` eszköz                         | tervezett      | Kikapcsolva; lásd a `RULES.md` 2. lépését.                                                                                                               |
+| Feladatközpont, B1: tár és akciók                  | kész           | Lásd a 10. részt.                                                                                                                                        |
 
 ## 9. Döntések
 
 A szabályok mögötti döntések, az okukkal és dátumukkal, a [`DECISIONS.md`](../../DECISIONS.md)-ben vannak.
+
+## 10. A feladatközpont
+
+A feladatközpont (task hub) a tároló második része (`src/hub`), 2026-11-22 óta (BER-2368). Az emberek és ágensek közös feladatait tartja nyilván: ki hozta létre, ki dolgozik rajta, mire és kitől vár, és mióta, hogy egy kérdés vagy egy piros CI ne sikkadjon el. A kész B1 lépés a tár és az akciói; a B2 külön programként futó munkameneteket, a B3 egy weboldalt ad hozzá. A szabályai a [`RULES.md`](../../RULES.md) T1–T7 szabályai; a listener R szabályai nem vonatkoznak rá.
+
+- **Állapotok:** az A2A hat állapota: `submitted`, `working`, `input-required`, `completed`, `failed` és `canceled`. Az utolsó három végleges. A `submitted` feladat, vagy az a `working`, amelynek lejárt a bérlete (lease), felvehető. A felvétel azt a felvehető feladatot kapja, amelyet a legrégebben vettek fel, a még soha fel nem vettet elsőként, így egy újra meg újra lejáró feladat nem tartja vissza a többit.
+- **Akciók:** `taskCreate`, `taskClaim`, `taskRenew`, `taskRequestInput`, `taskAnswer`, `taskAmend`, `taskCancel`, `taskComplete`, `taskFail`, `taskGet`, `taskEvents` és `taskWaiting`, mindegyik saját jogosultsággal (`task.create` és így tovább), ugyanazon az akciószerződésen, mint a nyugtapélda, így a REST, az MCP, az RPC és az atomok egyformán szolgálják ki őket. Minden változtatás a hívó által választott kéréskulcsot kap; ugyanazzal a kulccsal megismételve az első válasz jön vissza. A `taskWaiting` egy szereplő bejövő listája: a válaszára váró feladatok, a legrégebben várakozóval kezdve, mindegyik azzal, mióta vár.
+- **Tár:** SQLite az effect/sql-en át. Minden változtatás egy írótranzakció, amely pontosan egy eseményt fűz hozzá és frissíti a feladatot; a feladatok az események vetületei.
+
+| Szabály | Miről szól                                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------- |
+| T1      | a feladat egy állapotban van, és csak az átmenettábla szerint lép                                 |
+| T2      | élő bérlete legfeljebb egy szereplőnek (principal) van; csak ő hosszabbít, kérdez, zár vagy bukik |
+| T3      | végleges állapotba legfeljebb egyszer jut, és onnan nem lép ki                                    |
+| T4      | minden változás pontosan egy esemény a szereplőjével, véglegesítési sorrendben olvasható vissza   |
+| T5      | csak az válaszol, akire a feladat vár, és csak a felkínált lehetőségek egyikével                  |
+| T6      | az ismételt kéréskulcs az első választ adja vissza, és semmit sem változtat                       |
+| T7      | összeomlás után a tár az utolsó véglegesítés szerinti                                             |
+
+A feladatközpont szimulátora (`bun run sim:hub`) több szereplő seedelt hívássorozatait futtatja minden felületen át, szimulált időben, hogy a bérletek lejárjanak; véletlen pontokon, írótranzakción belül is, összeomlasztja a folyamatot úgy, hogy az adatbázisfájlokat a lemezen állapotukban lemásolja; és minden lépés után ellenőrzi a T1–T7-et egy saját referenciamodellel szemben. Minden szabályról kimutattuk, hogy elkap egy szándékosan elrontott változatot; a beültetett hibák a [`DECISIONS.md`](../../DECISIONS.md)-ben vannak.
