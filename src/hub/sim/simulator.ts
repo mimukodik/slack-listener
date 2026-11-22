@@ -53,6 +53,8 @@ export type HubCoverage = {
   eventReads: number;
   // Inbox reads that found at least one task waiting.
   inboxHits: number;
+  // Calls whose key another principal had already used.
+  sharedKeys: number;
   finals: number;
 };
 
@@ -71,6 +73,7 @@ export const emptyCoverage = (): HubCoverage => ({
   notAnOption: 0,
   eventReads: 0,
   inboxHits: 0,
+  sharedKeys: 0,
   finals: 0,
 });
 
@@ -131,10 +134,46 @@ const observed = (
   return `${JSON.stringify(actual)}, the model ${JSON.stringify(expected)}`;
 };
 
-// The rule a wrong answer to this call breaks.
-function ruleOf(action: string, keyUsed: boolean, wasFinal: boolean): string {
+// Which fields of the answered task differ from the model's, when both
+// answers carry a task.
+function taskDiff(expected: Expected, actual: Observation): readonly string[] {
+  if (actual.kind !== "success" || expected.kind !== "success") return [];
+  const taskOf = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value !== "object" || value === null || !("task" in value))
+      return undefined;
+    const { task } = value;
+    return typeof task === "object" && task !== null
+      ? Object.fromEntries(Object.entries(task))
+      : undefined;
+  };
+  const got = taskOf(actual.value);
+  const want = taskOf(expected.value);
+  if (got === undefined || want === undefined) return [];
+  return Object.keys(want).filter(
+    (key) => canonical(got[key]) !== canonical(want[key]),
+  );
+}
+
+const leaseFields = [
+  "claimant",
+  "claimedAt",
+  "leaseExpiresAt",
+  "leaseRemainingMs",
+];
+
+// The rule a wrong answer to this call breaks: from the field that went
+// wrong when the answer carries a task, else from the action.
+function ruleOf(
+  action: string,
+  keyUsed: boolean,
+  wasFinal: boolean,
+  diff: readonly string[],
+): string {
   if (keyUsed) return "T6";
   if (wasFinal) return "T3";
+  if (diff.some((key) => leaseFields.includes(key))) return "T2";
+  if (diff.includes("input")) return "T5";
+  if (diff.includes("state")) return "T1";
   if (action === "taskAnswer") return "T5";
   if (action === "taskEvents") return "T4";
   if (action === "taskWaiting") return "inbox";
@@ -236,7 +275,8 @@ class Driver {
     const wasFinal =
       state === "completed" || state === "failed" || state === "canceled";
     if (wrong !== undefined) {
-      this.failure = `${ruleOf(call.action, flight.keyUsed, wasFinal)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
+      const diff = taskDiff(flight.expected, actual);
+      this.failure = `${ruleOf(call.action, flight.keyUsed, wasFinal, diff)}: ${call.action} ${JSON.stringify(call.input)} as ${call.bearer} over ${call.surface} answered ${wrong}`;
       return;
     }
     this.count(flight, actual);
@@ -281,8 +321,11 @@ class Driver {
   private check(snapshot: Snapshot, rule: string): void {
     const fault = ruleFault(snapshot);
     if (fault !== undefined) this.failure = fault;
-    else if (!this.model.snapshotEquals(snapshot))
-      this.failure = `${rule}: the store differs from the model: ${canonical(snapshot.events.slice(-3))}, the model ${canonical(this.model.events.slice(-3))}`;
+    else {
+      const part = this.model.snapshotDiff(snapshot);
+      if (part !== undefined)
+        this.failure = `${part === "keys" ? "T6" : rule}: the store's ${part} differ from the model's: ${canonical(snapshot.events.slice(-3))}, the model ${canonical(this.model.events.slice(-3))}`;
+    }
   }
 
   crashed(where: CrashPoint): void {
@@ -325,6 +368,12 @@ class Driver {
     const surface = this.pick(surfaces);
     if (this.last !== undefined && this.chance(8)) {
       const last = this.last;
+      if (this.chance(15)) {
+        // The same key from another principal: a call of its own.
+        this.coverage.sharedKeys += 1;
+        const others = callers.filter((each) => each !== last.bearer);
+        return { ...last, surface, bearer: this.pick(others) };
+      }
       return this.chance(70)
         ? { ...last, surface }
         : {

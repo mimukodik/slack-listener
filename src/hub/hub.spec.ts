@@ -378,6 +378,75 @@ describe("claim order", () => {
   // The TLC lasso from the TLA+ spike (design-oldestFirstStarves): with
   // oldest-first claims, one worker reclaims t1 each time it lapses, and t2
   // never runs. Least recently claimed first takes turns.
+  it("ends a lease at its expiry instant: the old holder is refused there and a new claim succeeds", async () => {
+    const step = (
+      bearer: string,
+      action: string,
+      input: Record<string, unknown>,
+    ): Call => ({ action, input, bearer, surface: "direct" });
+    const timed: Timed = {
+      calls: [
+        step("h-ann", "taskCreate", {
+          requestKey: "c",
+          title: "t",
+          labels: [],
+        }),
+        step("h-agent1", "taskClaim", {
+          requestKey: "a",
+          labels: [],
+          leaseMs: 1000,
+        }),
+        step("h-agent2", "taskClaim", {
+          requestKey: "b",
+          labels: [],
+          leaseMs: 1000,
+        }),
+        step("h-agent1", "taskRenew", {
+          taskId: "T1",
+          requestKey: "r",
+          leaseMs: 1000,
+        }),
+        step("h-agent2", "taskClaim", {
+          requestKey: "d",
+          labels: [],
+          leaseMs: 1000,
+        }),
+      ],
+      // Claimed at 10 for 1000 ms: live at 1009, lapsed at 1010.
+      at: [0, 10, 1009, 1010, 1010],
+    };
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const beneath = yield* Clock.Clock;
+        const now = { ms: 0 };
+        return yield* runSequenceWith(hubFixture, timed.calls, "chosen", {
+          before: (index) => {
+            now.ms = timed.at[index] ?? now.ms;
+          },
+        }).pipe(
+          Effect.provideService(
+            Clock.Clock,
+            settableClock(beneath, () => now.ms),
+          ),
+        );
+      }).pipe(Effect.provide(hubPlatformLayer)),
+    );
+    const shape = run.observations.map((observation) =>
+      observation.kind === "failure"
+        ? (observation.error as { _tag: string })._tag
+        : observation.kind === "success"
+          ? ((observation.value as { _tag?: string })._tag ?? "success")
+          : observation.kind,
+    );
+    expect(shape).toEqual([
+      "success",
+      "Claimed",
+      "NoneReady",
+      "LeaseNotHeld",
+      "Claimed",
+    ]);
+  });
+
   it("takes the task claimed least recently, so a task that keeps lapsing starves no other", async () => {
     const step = (
       bearer: string,

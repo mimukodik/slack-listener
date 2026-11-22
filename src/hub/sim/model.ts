@@ -331,14 +331,22 @@ export class Model {
   // The store as the model has it: the tasks, the events and which request
   // keys were answered.
   snapshotEquals(snapshot: Snapshot): boolean {
+    return this.snapshotDiff(snapshot) === undefined;
+  }
+
+  // The first part of the store that differs from the model: the request
+  // keys first, since a key recorded for the wrong principal or call also
+  // moves the events and tasks after it.
+  snapshotDiff(snapshot: Snapshot): "keys" | "events" | "tasks" | undefined {
     const keys = snapshot.requests.map((row) =>
       row.split(" ").slice(0, 2).join(" "),
     );
-    return (
-      canonical(snapshot.tasks) === canonical([...this.tasks.values()]) &&
-      canonical(snapshot.events) === canonical(this.events) &&
-      canonical(keys) === canonical([...this.requests.keys()].sort())
-    );
+    if (canonical(keys) !== canonical([...this.requests.keys()].sort()))
+      return "keys";
+    if (canonical(snapshot.events) !== canonical(this.events)) return "events";
+    if (canonical(snapshot.tasks) !== canonical([...this.tasks.values()]))
+      return "tasks";
+    return undefined;
   }
 }
 
