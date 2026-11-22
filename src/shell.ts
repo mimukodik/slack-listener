@@ -3,7 +3,7 @@
 // simulator run the same program and differ only in the layers they provide
 // (PRINCIPLES.md: world-through-services, simulator-runs-the-program):
 //
-// - Clock: the core's now, and its timers as sleeping fibers;
+// - Clock: the core's now, and its timers and retries as sleeping fibers;
 // - Socket.WebSocketConstructor: Slack's Socket Mode connection;
 // - FileSystem: the state file and the frame recording;
 // - SlackApi over HttpClient, and the session's ChannelServer over Stdio.
@@ -15,12 +15,14 @@ import {
   Clock,
   Data,
   Deferred,
+  Duration,
   Effect,
   FiberHandle,
   FiberMap,
   FiberSet,
   FileSystem,
   Queue,
+  Schedule,
 } from "effect";
 import type { Scope } from "effect";
 import { Socket } from "effect/socket";
@@ -29,6 +31,7 @@ import type { ListenerConfig } from "./config.ts";
 import {
   initialState,
   step,
+  type Backoff,
   type CoreEffect,
   type CoreEvent,
   type Delivery,
@@ -166,7 +169,29 @@ type SavedFile = Partial<Omit<Saved, "reactions">> & {
   reactions?: (Omit<Reaction, "mark"> & { mark?: Reaction["mark"] })[];
 };
 
-const reactionAttempts = 3;
+// R8: the wait before each try of a run starts at 1 second and doubles, up
+// to maxBackoffMs. The core says which run a failed try belongs to and when a
+// run is over; each run steps its own copy of this schedule.
+export const backoffSchedule = (
+  maxBackoffMs: number,
+): Schedule.Schedule<Duration.Duration> =>
+  Schedule.exponential(Duration.seconds(1)).pipe(
+    Schedule.modifyDelay(({ duration }) =>
+      Effect.succeed(Duration.min(duration, Duration.millis(maxBackoffMs))),
+    ),
+  );
+
+// R18: a reaction call is tried three times, 1 and then 2 seconds apart.
+export const reactionRetry: Schedule.Schedule<Duration.Duration> =
+  Schedule.exponential(Duration.seconds(1)).pipe(Schedule.upTo({ times: 2 }));
+
+// Slack's answers that a reaction is already as asked, or that the message is
+// gone: the call is done, not failed (R18).
+const reactionDone = new Set([
+  "already_reacted",
+  "no_reaction",
+  "message_not_found",
+]);
 
 function parseFrame(data: string): SocketEnvelope | null {
   try {
@@ -477,10 +502,10 @@ export function runShell(
           Effect.flatMap(dispatch),
         );
 
-      // R18: one reaction call, tried up to three times. Slack's answers that
-      // the reaction is already as asked, or that the message is gone, count
-      // as done. It runs beside the
-      // deliveries, so a failing call never holds one up.
+      // R18: one reaction call, retried on reactionRetry. Slack's answers
+      // that the reaction is already as asked, or that the message is gone,
+      // count as done. It runs beside the deliveries, so a failing call never
+      // holds one up.
       const react = (reaction: Reaction): Effect.Effect<void> => {
         const name =
           reaction.mark === "seen" ? config.reaction : config.handledReaction;
@@ -488,25 +513,16 @@ export function runShell(
           reaction.action === "add"
             ? api.addReaction(config.core.channel, reaction.ts, name)
             : api.removeReaction(config.core.channel, reaction.ts, name);
-        const attempt = (tried: number): Effect.Effect<void> =>
-          call.pipe(
-            Effect.catch((error) => {
-              if (
-                error.reason === "already_reacted" ||
-                error.reason === "no_reaction" ||
-                error.reason === "message_not_found"
-              )
-                return Effect.void;
-              if (tried + 1 < reactionAttempts)
-                return Effect.sleep(1000 * 2 ** tried).pipe(
-                  Effect.andThen(attempt(tried + 1)),
-                );
-              return log(
-                `reaction ${reaction.action} ${reaction.mark} on ${reaction.ts} given up: ${error.reason}`,
-              );
-            }),
-          );
-        return attempt(0).pipe(
+        return call.pipe(
+          Effect.catch((error) =>
+            reactionDone.has(error.reason) ? Effect.void : Effect.fail(error),
+          ),
+          Effect.retry(reactionRetry),
+          Effect.catch((error) =>
+            log(
+              `reaction ${reaction.action} ${reaction.mark} on ${reaction.ts} given up: ${error.reason}`,
+            ),
+          ),
           Effect.andThen(dispatch({ type: "reaction_done", reaction })),
         );
       };
@@ -523,6 +539,35 @@ export function runShell(
           );
         });
 
+      // R8: each run of tries steps its own copy of the backoff schedule, in
+      // the order the core decided the waits; a reset starts a fresh copy.
+      // The wait counts from the step that decided it, as a set_timer does.
+      const freshBackoff = Schedule.toStep(
+        backoffSchedule(config.core.maxBackoffMs),
+      );
+      const backoffs: Record<Backoff, Effect.Success<typeof freshBackoff>> = {
+        connection: yield* freshBackoff,
+        delivery: yield* freshBackoff,
+      };
+      const backOff = (
+        backoff: Backoff,
+        timer: TimerName,
+        decidedAtMs: number,
+      ): Effect.Effect<void> =>
+        backoffs[backoff](decidedAtMs, undefined).pipe(
+          // The schedule never ends, so a Done here is a defect.
+          Effect.orDie,
+          Effect.flatMap(([, delay]) =>
+            setTimer(timer, decidedAtMs + Duration.toMillis(delay)),
+          ),
+        );
+      const resetBackoff = (backoff: Backoff): Effect.Effect<void> =>
+        freshBackoff.pipe(
+          Effect.map((fresh) => {
+            backoffs[backoff] = fresh;
+          }),
+        );
+
       const ack = (generation: number, envelopeId: string) =>
         Effect.suspend(() => {
           const current = live;
@@ -538,12 +583,17 @@ export function runShell(
 
       const run = (
         effect: CoreEffect,
+        now: number,
       ): Effect.Effect<void, ShellStopped, Socket.WebSocketConstructor> => {
         switch (effect.type) {
           case "save":
             return writeSaved(fs, config.stateFile, effect.saved);
           case "set_timer":
             return setTimer(effect.name, effect.atMs);
+          case "back_off":
+            return backOff(effect.backoff, effect.timer, now);
+          case "reset_backoff":
+            return resetBackoff(effect.backoff);
           case "log":
             return log(effect.message);
           case "ack":
@@ -609,7 +659,7 @@ export function runShell(
             new ShellStopped({ reason: `core stopped: ${message(error)}` }),
         });
         state = result.state;
-        for (const effect of result.effects) yield* run(effect);
+        for (const effect of result.effects) yield* run(effect, now);
       });
 
       // A fiber that died stops the listener loudly, as an unhandled
