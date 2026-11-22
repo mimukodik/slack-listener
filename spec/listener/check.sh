@@ -2,7 +2,7 @@
 # Runs every configuration and checks its expected outcome: the correct
 # protocol passes (TLC exits 0), each planted bug and design finding fails
 # the named property. Local only; needs TLA2TOOLS_JAR and JAVA (see tlc.sh).
-# About 6 minutes on 4 workers. Prints one line per configuration.
+# About 11 minutes on 4 workers. Prints one line per configuration.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${TLC_OUT:-${TMPDIR:-/tmp}/listener-tlc}
@@ -24,15 +24,20 @@ expect Listener 300 pass
 expect edits 300 pass
 expect decodes 300 pass
 expect live 300 pass
-expect live3 600 pass
+expect live3 900 pass
 expect Marks 300 pass
+expect marks-giveUp 300 pass
 expect design-releaseMargin 300 pass
-expect design-badTsParent 120 R7Safe
-expect design-live-badTsParent 120 R7
-expect r20 300 R4
-expect design-r21resend 300 R4
-expect marks-design-giveUp 120 NeverBare
+expect design-dropGathered 300 pass
+expect design-badTsParent 120 pass
+expect design-live-badTsParent 120 pass
+expect r20 300 pass
+expect design-r21resend 300 pass
+expect marks-design-giveUp 120 pass
 expect marks-design-literal 120 DoneMeansAnswered
+expect noexcuse-badTsParent 120 R7Safe
+expect noexcuse-live-badTsParent 120 R7
+expect noexcuse-r20 300 R4
 expect bug-saveBeforeWrite 120 R7Safe
 expect bug-noIntent 120 R2
 expect bug-ackTwice 120 AckOnce
@@ -41,9 +46,12 @@ expect bug-skipParentNoThread 120 R7Safe
 expect bug-window24h 120 R7Safe
 expect bug-noVersionCheck 120 R5
 expect bug-releaseOnDisconnect 120 R7Safe
+expect bug-takeResend 300 R4
+expect bug-liveFromAtEnd 300 R7Safe
 expect marks-bug-removeFirst 120 NeverBare
 expect marks-bug-unordered 120 NeverBare
 expect marks-bug-ignoreHandled 120 DoneHolds
 expect marks-bug-lazySave 120 DoneSticks
 expect marks-bug-doneNotSaved 120 DoneMeansAnswered
+expect marks-bug-giveUpRemoves 120 NeverBare
 exit "$fail"

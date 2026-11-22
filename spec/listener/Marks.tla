@@ -8,12 +8,13 @@
 (* two kinds (R10), marks them seen (:eyes:), and done (:check:) when a   *)
 (* post of the own side appears in the thread or the session marks done.  *)
 (* Reaction calls run from a queue saved with the marks; each call can    *)
-(* fail or lose its reply, is tried at most 3 times, then given up.       *)
+(* fail or lose its reply, is tried at most 3 times, then given up. When  *)
+(* adding done is given up, seen stays: its queued removal is dropped.    *)
 (* A crash restores the marks and the queue from the last save.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANTS N, MaxCrash, MaxFail, Handled, StrictGiveUp, Bug, Nil
+CONSTANTS N, MaxCrash, MaxFail, Handled, Bug, Nil
 
 VARIABLES posted, snd, th,          \* Slack: author kind and thread per ts
           rx,                       \* Slack: own reactions per message
@@ -98,6 +99,13 @@ Apply(c) ==
 
 \* One try of a queued call: ok, failed (not applied), or applied with the reply lost.
 \* already_reacted / no_reaction count as success.
+\* R18: when adding the check is given up, the eyes stay, so the queued
+\* removal of that message's eyes is dropped (planted back by "giveUpRemoves").
+KeepEyes(c, rest) ==
+    IF c.op = "add" /\ c.e = "check" /\ Bug # "giveUpRemoves"
+      THEN SelectSeq(rest, LAMBDA x : ~(x.op = "rm" /\ x.e = "eyes" /\ x.m = c.m))
+      ELSE rest
+
 Exec(i, outcome) ==
     /\ i \in 1..Len(q) /\ (i = 1 \/ Bug = "unordered")
     \* The queue's progress is saved after each call, so a restart replays at most the last one.
@@ -114,7 +122,7 @@ Exec(i, outcome) ==
                                THEN eyesAfterCheck \cup {c.m} ELSE eyesAfterCheck
           /\ IF outcome = "ok" THEN /\ q' = rest /\ UNCHANGED gaveUp
              ELSE IF again.tries >= 3
-               THEN /\ q' = rest /\ gaveUp' = gaveUp \cup {[e |-> c.e, op |-> c.op, m |-> c.m]}
+               THEN /\ q' = KeepEyes(c, rest) /\ gaveUp' = gaveUp \cup {[e |-> c.e, op |-> c.op, m |-> c.m]}
                ELSE /\ q' = [q EXCEPT ![i] = again] /\ UNCHANGED gaveUp
           /\ fails' = IF outcome = "ok" THEN fails ELSE fails + 1
     /\ dirty' = TRUE
@@ -149,12 +157,11 @@ Spec == Init /\ [][Next]_vars
 (* ------------------------------ the rules ----------------------------- *)
 
 GaveUp(m) == \E g \in gaveUp : g.m = m
-\* A give-up that excuses a bare message: any (loose), or only of the eyes add (strict).
-Excuse(m) == IF StrictGiveUp THEN \E g \in gaveUp : g.m = m /\ g.op = "add" /\ g.e = "eyes"
-             ELSE GaveUp(m)
 
-\* R18: a message once marked never shows no own reaction.
-NeverBare == \A m \in shown : rx[m] = {} => Excuse(m)
+\* R18: a delivered message always carries one of the two. Once a mark
+\* showed on it, it never shows none, give-ups included; only a message
+\* whose first add was given up, and so never showed a mark, can be bare.
+NeverBare == \A m \in shown : rx[m] # {}
 
 \* R18: done is final; eyes never come back after check.
 DoneSticks == eyesAfterCheck = {}

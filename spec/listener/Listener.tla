@@ -28,7 +28,7 @@ CONSTANTS
     Senders,    \* subset of {"other", "own"}; "own" = an own-side agent post
     Decodes,    \* subset of {"ok", "bad", "badTs"}: how a message reads in a page (R21)
     LiveBads,   \* subset of BOOLEAN: TRUE = its envelope payload does not decode (R20)
-    ExcuseBadTsParent, \* TRUE: R7 excuses replies under a parent whose ts does not decode
+    Excuses,    \* the rules' excuses checked: "badTsParent" (R21), "r20Order" (R4)
     Bug,
     Nil
 
@@ -37,6 +37,7 @@ VARIABLES
     unacked, pipe, rcvd, acks, dups, r20drop, \* Socket Mode
     conn, hcur, todo, gath, held, wip, redo, \* listener memory
     caught,                                 \* the last catch-up ended and none has started since
+    liveFrom,                               \* the newest ts posted when the last catch-up started
     cursor, dv,                             \* listener memory: cursor, delivered versions
     sCursor, sdv, sInflight,                \* the saved state file
     slog,                                   \* ghost: what the session received
@@ -44,7 +45,7 @@ VARIABLES
 
 slackV  == <<posted, msg, age, edits, ages>>
 sockV   == <<unacked, pipe, rcvd, acks, dups, r20drop>>
-memV    == <<conn, hcur, todo, gath, held, wip, redo, cursor, dv, caught>>
+memV    == <<conn, hcur, todo, gath, held, wip, redo, cursor, dv, caught, liveFrom>>
 fileV   == <<sCursor, sdv, sInflight>>
 vars == <<slackV, sockV, memV, fileV, slog, crashes, discs>>
 
@@ -105,6 +106,11 @@ Resend(e) ==
 Items == gath \cup held
 Delivered(m) == dv[m] # -1
 
+\* R21: a live message posted before the last catch-up started is that
+\* catch-up's to read (or to skip), so its resend is dropped. "takeResend"
+\* plants the spike's first choice back: the resend is delivered.
+Stale(m) == m <= liveFrom /\ Bug # "takeResend"
+
 \* R20: ack every frame that has an envelope id; drop what does not decode.
 Receive ==
     /\ Connected /\ pipe # << >>
@@ -118,20 +124,24 @@ Receive ==
           /\ IF msg[m].lbad
                THEN /\ r20drop' = IF e.k = "msg" THEN r20drop \cup {m} ELSE r20drop
                     /\ UNCHANGED held
-               ELSE /\ held' = IF ~Allowed(m) THEN held
+               ELSE /\ held' = IF ~Allowed(m) \/ (e.k = "msg" /\ Stale(m)) THEN held
                                ELSE IF e.k = "msg"
                                  THEN IF Delivered(m) THEN held
                                       ELSE held \cup {Item("msg", m, 0, FALSE)}
                                  ELSE held \cup {Item("edit", m, 1, FALSE)}
                     /\ UNCHANGED r20drop
-    /\ UNCHANGED <<slackV, dups, conn, hcur, todo, gath, wip, redo, cursor, dv, caught, fileV, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, dups, conn, hcur, todo, gath, wip, redo, cursor, dv, caught, liveFrom, fileV, slog, crashes, discs>>
 
 \* R8: connect (again). Catch-up starts: history pages from the newest down.
+\* What an earlier catch-up gathered and did not yet deliver is kept (R7).
+\* "liveFromAtEnd" plants a resend cut that is too wide: taken when the
+\* catch-up ends, it drops live messages posted while it read.
 Connect ==
     /\ conn = "down" /\ redo = Nil
-    /\ conn' = "reading" /\ hcur' = N + 1 /\ todo' = {} /\ gath' = {}
+    /\ conn' = "reading" /\ hcur' = N + 1 /\ todo' = {}
     /\ caught' = FALSE
-    /\ UNCHANGED <<slackV, sockV, held, wip, redo, cursor, dv, fileV, slog, crashes, discs>>
+    /\ liveFrom' = IF Bug = "liveFromAtEnd" THEN liveFrom ELSE posted
+    /\ UNCHANGED <<slackV, sockV, gath, held, wip, redo, cursor, dv, fileV, slog, crashes, discs>>
 
 Disconnect ==
     /\ Connected /\ discs < MaxDisc
@@ -140,7 +150,7 @@ Disconnect ==
     /\ gath' = IF Bug = "dropGathered" THEN {} ELSE gath
     \* Frames in flight are lost: nothing more is delivered until a new catch-up ends.
     /\ caught' = (caught /\ Bug = "releaseOnDisconnect")
-    /\ UNCHANGED <<slackV, unacked, rcvd, acks, dups, r20drop, held, wip, redo, cursor, dv, fileV, slog, crashes>>
+    /\ UNCHANGED <<slackV, unacked, rcvd, acks, dups, r20drop, held, wip, redo, cursor, dv, liveFrom, fileV, slog, crashes>>
 
 \* A message catch-up would read again from cursor c (R7, R21).
 Fresh(m, c) == m + Margin > c
@@ -177,18 +187,19 @@ ReadPage ==
           ELSE /\ hcur' = Min(S)
                /\ gath' = gath \cup newMsgs \cup newEdits
                /\ todo' = todo \cup threads
-    /\ UNCHANGED <<slackV, sockV, conn, held, wip, redo, cursor, dv, caught, fileV, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, held, wip, redo, cursor, dv, caught, liveFrom, fileV, slog, crashes, discs>>
 
 ReadReplies(p) ==
     /\ conn = "reading" /\ p \in todo
     /\ LET rs == {r \in Replies(p) : msg[r].dec = "ok" /\ Allowed(r) /\ Fresh(r, cursor) /\ ~Delivered(r)}
        IN gath' = gath \cup {Item("msg", r, msg[r].ver, FALSE) : r \in rs}
     /\ todo' = todo \ {p}
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, held, wip, redo, cursor, dv, caught, fileV, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, held, wip, redo, cursor, dv, caught, liveFrom, fileV, slog, crashes, discs>>
 
 ReadsDone ==
     /\ conn = "reading" /\ hcur = 0 /\ todo = {}
     /\ conn' = "live" /\ caught' = TRUE
+    /\ liveFrom' = IF Bug = "liveFromAtEnd" THEN posted ELSE liveFrom
     /\ UNCHANGED <<slackV, sockV, hcur, todo, gath, held, wip, redo, cursor, dv, fileV, slog, crashes, discs>>
 
 (* Delivery: the oldest item first (R4), messages before edits of one ts. *)
@@ -206,14 +217,14 @@ Begin ==
           /\ held' = held \ {x \in held : x.k = i.k /\ x.m = i.m}
           /\ wip' = IF Wanted(i) THEN [k |-> i.k, m |-> i.m, v |-> i.v, dup |-> i.dup, step |-> "new"]
                     ELSE Nil
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, redo, cursor, dv, caught, fileV, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, redo, cursor, dv, caught, liveFrom, fileV, slog, crashes, discs>>
 
 \* After a restart: the saved intent is delivered again, marked possible_duplicate.
 Redo ==
     /\ wip = Nil /\ redo # Nil
     /\ wip' = [k |-> redo.k, m |-> redo.m, v |-> redo.v, dup |-> TRUE, step |-> "intent"]
     /\ redo' = Nil
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, cursor, dv, caught, fileV, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, cursor, dv, caught, liveFrom, fileV, slog, crashes, discs>>
 
 NewCursor(w) == IF w.k = "msg" THEN Max({cursor, w.m}) ELSE cursor
 
@@ -225,7 +236,7 @@ SaveIntent ==
     /\ IF Bug = "saveBeforeWrite"
          THEN /\ sdv' = [sdv EXCEPT ![wip.m] = wip.v] /\ sCursor' = NewCursor(wip)
          ELSE UNCHANGED <<sdv, sCursor>>
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, cursor, dv, caught, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, cursor, dv, caught, liveFrom, slog, crashes, discs>>
 
 Write ==
     /\ wip # Nil /\ wip.step = "intent"
@@ -233,13 +244,13 @@ Write ==
     /\ dv' = [dv EXCEPT ![wip.m] = Max({@, wip.v})]
     /\ cursor' = NewCursor(wip)
     /\ wip' = [wip EXCEPT !.step = "written"]
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, caught, fileV, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, caught, liveFrom, fileV, crashes, discs>>
 
 SaveDone ==
     /\ wip # Nil /\ wip.step = "written"
     /\ sdv' = dv /\ sCursor' = cursor /\ sInflight' = Nil
     /\ wip' = Nil
-    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, cursor, dv, caught, slog, crashes, discs>>
+    /\ UNCHANGED <<slackV, sockV, conn, hcur, todo, gath, held, redo, cursor, dv, caught, liveFrom, slog, crashes, discs>>
 
 \* A crash at any point: memory is lost, the file is read back (R19: it decodes).
 Crash ==
@@ -249,7 +260,7 @@ Crash ==
     /\ held' = {} /\ wip' = Nil /\ caught' = FALSE
     /\ redo' = sInflight
     /\ cursor' = sCursor /\ dv' = sdv
-    /\ UNCHANGED <<slackV, unacked, rcvd, acks, dups, r20drop, fileV, slog, discs>>
+    /\ UNCHANGED <<slackV, unacked, rcvd, acks, dups, r20drop, liveFrom, fileV, slog, discs>>
 
 Init ==
     /\ posted = 0
@@ -258,7 +269,7 @@ Init ==
     /\ unacked = {} /\ pipe = << >> /\ rcvd = [e \in Envs |-> 0] /\ acks = [e \in Envs |-> 0]
     /\ dups = 0 /\ r20drop = {}
     /\ conn = "down" /\ hcur = N + 1 /\ todo = {} /\ gath = {} /\ held = {}
-    /\ wip = Nil /\ redo = Nil /\ caught = FALSE /\ cursor = 0 /\ dv = [m \in M |-> -1]
+    /\ wip = Nil /\ redo = Nil /\ caught = FALSE /\ liveFrom = 0 /\ cursor = 0 /\ dv = [m \in M |-> -1]
     /\ sCursor = 0 /\ sdv = [m \in M |-> -1] /\ sInflight = Nil
     /\ slog = << >> /\ crashes = 0 /\ discs = 0
 
@@ -299,10 +310,13 @@ R2Edit == \A j \in SIdx : slog[j].k = "edit" =>
 R5 == \A j \in SIdx : (slog[j].k = "edit" /\ ~slog[j].dup) =>
         \A i \in 1..(j - 1) : slog[i].m = slog[j].m => slog[i].v < slog[j].v
 
-\* R4: within a thread, and among top-level messages, in ts order.
+\* R4: within a thread, and among top-level messages, in ts order. A message
+\* whose live event did not decode (R20) and that a later catch-up finds may
+\* arrive after newer messages of its thread.
 R4 == \A i, j \in SIdx :
         (i < j /\ slog[i].k = "msg" /\ slog[j].k = "msg" /\ ~slog[j].dup
-         /\ msg[slog[i].m].par = msg[slog[j].m].par) => slog[i].m < slog[j].m
+         /\ msg[slog[i].m].par = msg[slog[j].m].par
+         /\ ~("r20Order" \in Excuses /\ slog[j].m \in r20drop)) => slog[i].m < slog[j].m
 
 R10 == \A i \in SIdx : Allowed(slog[i].m)
 
@@ -310,20 +324,25 @@ R10 == \A i \in SIdx : Allowed(slog[i].m)
 AckOnce == \A e \in Envs : acks[e] <= rcvd[e]
 
 \* R7's excuses, from the rules: aged out (24 h / 7 days), skipped by
-\* catch-up (R21), or dropped live as not decoding (R20, out of scope).
+\* catch-up (R21, its live resend dropped as well), dropped live as not
+\* decoding (R20, out of scope), or a reply under a parent whose thread
+\* fields do not decode (R21). The model knows only the parent's ts ("badTs"),
+\* not reply_count or latest_reply, and has no reply also sent to the
+\* channel, which R21 does not excuse.
 Excused(m) ==
     \/ msg[m].dec # "ok"
     \/ m \in r20drop
     \/ (Top(m) /\ age[m] >= 1)
     \/ (~Top(m) /\ age[msg[m].par] = 2)
-    \/ (ExcuseBadTsParent /\ ~Top(m) /\ msg[msg[m].par].dec = "badTs")
+    \/ ("badTsParent" \in Excuses /\ ~Top(m) /\ msg[msg[m].par].dec = "badTs")
 
 \* Would a catch-up from cursor c read m?
 Readable(m, c) ==
     /\ Fresh(m, c) /\ msg[m].dec = "ok"
     /\ IF Top(m) THEN age[m] = 0 ELSE age[msg[m].par] < 2
 
-InPipe(m) == \E i \in 1..Len(pipe) : pipe[i] = Env("msg", m)
+\* An envelope in flight that Receive will hold, not drop as stale.
+InPipe(m) == (\E i \in 1..Len(pipe) : pipe[i] = Env("msg", m)) /\ ~Stale(m)
 MemRec(m) ==
     /\ ~Delivered(m)
     /\ \/ \E x \in Items : x.k = "msg" /\ x.m = m
