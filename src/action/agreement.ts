@@ -74,8 +74,9 @@ export function runAgreement(
     const rest = yield* runSequence(calls, "rest", options);
     const mcp = yield* runSequence(calls, "mcp", options);
     const atom = yield* runSequence(calls, "atom", options);
+    const rpc = yield* runSequence(calls, "rpc", options);
     const direct = yield* runSequence(calls, "direct", options);
-    return { chosen, bySurface: { rest, mcp, atom, direct } };
+    return { chosen, bySurface: { rest, mcp, atom, rpc, direct } };
   });
 }
 

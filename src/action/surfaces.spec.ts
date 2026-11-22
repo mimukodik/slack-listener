@@ -238,7 +238,13 @@ describe("what a handler receives", () => {
   });
 
   // The surface whose handlers serve a call: atoms call the REST handlers.
-  const servedBy = { rest: "rest", atom: "rest", mcp: "mcp", direct: "direct" };
+  const servedBy = {
+    rest: "rest",
+    atom: "rest",
+    mcp: "mcp",
+    rpc: "rpc",
+    direct: "direct",
+  };
 
   it("is the principal, on exactly the services its surface was built with", async () => {
     const built = new Map<string, readonly string[]>();

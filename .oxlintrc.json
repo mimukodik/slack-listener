@@ -237,6 +237,7 @@
         "src/action/http.ts",
         "src/action/mcp.ts",
         "src/action/atoms.ts",
+        "src/action/rpc.ts",
         "src/action/harness.ts",
         "src/action/agreement.ts"
       ],

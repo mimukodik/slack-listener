@@ -1,12 +1,14 @@
 // The projections against the definitions: the OpenAPI document describes
 // every action as defined, a client that reads only the document can call an
-// endpoint, and the MCP tool list says the same as the document. A surface
-// that drifts from the definitions (a renamed field, a looser input, a lost
-// error) fails here even when no call in the agreement property reaches it.
+// endpoint, and the MCP tool list and the OpenRPC document say the same as
+// the OpenAPI document. A surface that drifts from the definitions (a renamed
+// field, a looser input, a lost error) fails here even when no call in the
+// agreement property reaches it.
 import { describe, expect, it } from "bun:test";
 
 import { Context, Effect, Schema } from "effect";
 import { McpProtocol, McpTest } from "effect/ai";
+import { OpenRpc } from "effect/rpc";
 
 import { type AnyAction, provideAction } from "./action.ts";
 import { platformLayer, makeWorld } from "./harness.ts";
@@ -18,6 +20,7 @@ import {
   makeStore,
   ReceiptStore,
 } from "./receipts.ts";
+import { groupOf } from "./rpc.ts";
 
 const services = Context.make(ReceiptStore, makeStore(["E1", "E2"]));
 const actions: ReadonlyArray<AnyAction> = [
@@ -266,6 +269,40 @@ describe("the MCP tool list", () => {
       expect(tool.annotations?.readOnlyHint).toBe(action.kind === "query");
       // The same input schema the REST surface documents.
       expect(withoutAdditional(tool.inputSchema)).toEqual(
+        documentedInput(action),
+      );
+    }
+  });
+});
+
+describe("the OpenRPC document", () => {
+  // It lists each action with its input and its success, and no typed error:
+  // OpenRPC's errors are JSON-RPC codes with a fixed message, which the
+  // contract's errors are not (DECISIONS.md, 2026-11-22).
+  const rpcDocument: unknown = JSON.parse(
+    JSON.stringify(
+      OpenRpc.fromRpcGroup(groupOf(actions), {
+        info: { title: "actions", version: "0.0.1" },
+      }),
+    ),
+  );
+
+  it("describes every action's input and success as defined", () => {
+    const methods = list(at(rpcDocument, "methods")).map(record);
+    expect(methods.map((method) => method["name"])).toEqual(
+      actions.map((action) => action.name),
+    );
+    for (const [index, action] of actions.entries()) {
+      const method = methods[index];
+      expect(withoutAdditional(at(method, "x-effect-params-schema"))).toEqual(
+        jsonSchemaOf(action.inputSchema),
+      );
+      expect(withoutAdditional(at(method, "result", "schema"))).toEqual(
+        jsonSchemaOf(action.success),
+      );
+      expect(method?.["errors"]).toBeUndefined();
+      // The same input schema the REST surface documents.
+      expect(withoutAdditional(at(method, "x-effect-params-schema"))).toEqual(
         documentedInput(action),
       );
     }

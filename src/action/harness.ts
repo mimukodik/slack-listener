@@ -10,16 +10,34 @@
 // in the same scope) and the atom registry (its tasks go to the builder's Scheduler). In a
 // plain test that is Effect's default runtime; under SimRuntime it is the
 // seeded one, which is what lets the agreement run under the simulator.
-import { Cause, Effect, Exit, Layer, Result, Scheduler, Schema } from "effect";
-import type { Scope } from "effect";
+import {
+  Cause,
+  Effect,
+  Exit,
+  Layer,
+  Result,
+  Scheduler,
+  Schema,
+  SchemaIssue,
+  Scope,
+} from "effect";
 import { McpProtocol } from "effect/ai";
 import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
   HttpEffect,
   HttpRouter,
   HttpServer,
   type HttpServerRequest,
 } from "effect/http";
 import { AtomRegistry } from "effect/reactivity";
+import {
+  RpcClient,
+  type RpcClientError,
+  type RpcGroup,
+  RpcSerialization,
+} from "effect/rpc";
 
 import {
   type AnyAction,
@@ -44,8 +62,9 @@ import { apiOf, serverLayer } from "./http.ts";
 import { mcpHttpLayer, mcpPath } from "./mcp.ts";
 import { inMemoryPolicy } from "./policy.ts";
 import { permissions } from "./receipts.ts";
+import { type ActionGroup, groupOf, rpcHttpLayer, rpcPath } from "./rpc.ts";
 
-export const surfaces = ["rest", "mcp", "atom", "direct"] as const;
+export const surfaces = ["rest", "mcp", "atom", "rpc", "direct"] as const;
 export type Surface = (typeof surfaces)[number];
 
 // One answer, as every surface can report it. Values and errors are their
@@ -177,10 +196,20 @@ function fromExit(
   if (
     refusedBeforeSending &&
     Result.isSuccess(defect) &&
-    Schema.isSchemaError(defect.success)
+    isInputRefusal(defect.success)
   )
     return { kind: "invalid" };
   return { kind: "defect" };
+}
+
+// A client's refusal of an input: a SchemaError, or the Error a schema's make
+// throws, whose cause is the schema issue (RpcClient builds the payload with
+// make before it encodes it).
+function isInputRefusal(defect: unknown): boolean {
+  return (
+    Schema.isSchemaError(defect) ||
+    (defect instanceof Error && SchemaIssue.isIssue(defect.cause))
+  );
 }
 
 function parseJson(text: string): Result.Result<unknown, string> {
@@ -289,6 +318,45 @@ function restRequest(action: AnyAction<unknown>, call: Call): Request {
   return new Request(url, { method: "GET", headers });
 }
 
+// An RPC client of the world's group, flattened: the action's name and its
+// input.
+export type RpcCaller = RpcClient.RpcClient.Flat<
+  ActionGroup extends RpcGroup.RpcGroup<infer R> ? R : never,
+  RpcClientError.RpcClientError
+>;
+
+// An RpcClient of a group over HTTP, as an outside client builds one, with
+// the bearer in the Authorization header of every request, in the current
+// scope.
+export function rpcClientOf(group: ActionGroup, fetch: Fetch, bearer: string) {
+  return Effect.gen(function* () {
+    const http = (yield* HttpClient.HttpClient).pipe(
+      HttpClient.mapRequest((request) =>
+        bearer === ""
+          ? request
+          : HttpClientRequest.bearerToken(request, bearer),
+      ),
+      HttpClient.mapRequest(
+        HttpClientRequest.prependUrl(`${baseUrl}${rpcPath}`),
+      ),
+    );
+    const protocol = yield* RpcClient.makeProtocolHttp(http);
+    const client: RpcCaller = yield* RpcClient.make(group, {
+      flatten: true,
+    }).pipe(Effect.provideService(RpcClient.Protocol, protocol));
+    return client;
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        RpcSerialization.layerJson,
+        FetchHttpClient.layer.pipe(
+          Layer.provide(Layer.succeed(FetchHttpClient.Fetch)(fetch)),
+        ),
+      ),
+    ),
+  );
+}
+
 export type WorldOptions = {
   // When the REST server's answer reaches the client: at once by default; the
   // simulator passes a seeded delay on its own clock.
@@ -315,9 +383,11 @@ export function makeWorld(
     // fetch.
     const api = apiOf("actions", actions);
     const handlerEffect = yield* HttpRouter.toHttpEffect(
-      Layer.mergeAll(serverLayer(api, actions), mcpHttpLayer(actions)).pipe(
-        Layer.provide(HttpServer.layerServices),
-      ),
+      Layer.mergeAll(
+        serverLayer(api, actions),
+        mcpHttpLayer(actions),
+        rpcHttpLayer(actions),
+      ).pipe(Layer.provide(HttpServer.layerServices)),
       // The only failure is a protocol the endpoint does not serve: a bug.
     ).pipe(Effect.orDie);
     const handler = HttpEffect.toWebHandlerWith<
@@ -409,6 +479,20 @@ export function makeWorld(
       return client;
     };
 
+    // RPC: one RpcClient per bearer over HTTP, with the bearer in the
+    // Authorization header of every request, built in the world's scope.
+    const group = groupOf(actions);
+    const scope = yield* Scope.Scope;
+    const rpcClients = new Map<string, RpcCaller>();
+    const rpcClient = (bearer: string) =>
+      Effect.gen(function* () {
+        const existing = rpcClients.get(bearer);
+        if (existing !== undefined) return existing;
+        const client = yield* rpcClientOf(group, fetch, bearer);
+        rpcClients.set(bearer, client);
+        return client;
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+
     const call = (input: Call): Effect.Effect<Observation> =>
       Effect.gen(function* () {
         const action = byName.get(input.action);
@@ -443,6 +527,16 @@ export function makeWorld(
               input.input,
             );
             return fromMcp(codec, result);
+          }
+          case "rpc": {
+            const client = yield* rpcClient(input.bearer);
+            const before = requests;
+            // The client checks the input with make, which throws: a defect
+            // here, before anything is sent.
+            const exit = yield* Effect.exit(
+              Effect.suspend(() => client(action.name, input.input)),
+            );
+            return fromExit(codec, exit, requests === before);
           }
           case "atom": {
             const before = requests;
