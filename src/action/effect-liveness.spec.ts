@@ -1,13 +1,21 @@
-// Two liveness failures that the simulator's seeded yield budget reaches and
+// Liveness failures that the simulator's seeded yield budget reaches and
 // Effect's default budget does not: an interrupt Effect 4.1.4 loses, shown
-// with Effect alone, and a stall of a bare in-memory MCP server whose cause
-// is not found. They are pinned here, so that a change that fixes either
-// fails these tests and withFixedBudget (agreement.ts) can be reconsidered
-// (DECISIONS.md, 2026-11-22).
+// with Effect alone, and a bare MCP server that stalls in memory and answers
+// an empty 500 over HTTP, whose causes are not found. They are pinned here,
+// so that a change that fixes any of them fails these tests and
+// withFixedBudget (agreement.ts) can be reconsidered (DECISIONS.md,
+// 2026-11-22).
 import { describe, expect, it } from "bun:test";
 
 import { Deferred, Effect, Layer, Scheduler, Schema } from "effect";
+import type { Scope } from "effect";
 import { McpProtocol, McpServer, McpTest, Tool, Toolkit } from "effect/ai";
+import {
+  HttpEffect,
+  HttpRouter,
+  HttpServer,
+  type HttpServerRequest,
+} from "effect/http";
 
 import { host, withTripwire } from "../sim/host.ts";
 import { SimRuntime } from "../sim/runtime.ts";
@@ -70,11 +78,12 @@ describe("Effect 4.1.4 loses an interrupt under a yield budget of one", () => {
   });
 });
 
-// The second failure is not attributed. A bare McpTest server with one tool
-// of its own, and none of the contract's code, stalls for some seeds under
-// the seeded budget and for none under the fixed one; nothing here shows
-// whether Effect or the simulator is the cause.
-describe("a bare in-memory MCP server under the simulator's seeded budget", () => {
+// The second and third failures are not attributed. A bare MCP server with
+// one tool of its own, and none of the contract's code, stalls in memory and
+// answers an empty 500 over HTTP for some seeds under the seeded budget, and
+// does neither under the fixed one; nothing here shows whether Effect or the
+// simulator is the cause.
+describe("a bare MCP server under the simulator's seeded budget", () => {
   const Noop = Tool.make("noop", {
     description: "Does nothing.",
     success: Schema.Boolean,
@@ -108,5 +117,88 @@ describe("a bare in-memory MCP server under the simulator's seeded budget", () =
   it("leaves a ping unanswered for seed 216, and answers it under the fixed budget", async () => {
     expect(await outcome(216, pings)).toBe("stuck");
     expect(await outcome(216, withFixedBudget(pings))).toBe("done");
+  });
+
+  // The same server over Streamable HTTP, behind a web handler on the
+  // builder's context, answering after a seeded delay.
+  const endpoint = McpServer.layerHttp({
+    name: "bare",
+    version: "0.0.1",
+    path: "/mcp",
+    protocols: [McpProtocol.v2026_07_28],
+    registrations,
+  });
+  const request = (id: number) =>
+    new Request("http://bare.invalid/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/call",
+        "mcp-name": "noop",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: {
+          name: "noop",
+          arguments: {},
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+              name: "test",
+              version: "0.0.1",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    });
+  const calls = (runtime: SimRuntime, statuses: number[]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Effect.context<never>();
+        const handler = HttpEffect.toWebHandlerWith<
+          never,
+          HttpServerRequest.HttpServerRequest | Scope.Scope
+        >(context)(
+          yield* HttpRouter.toHttpEffect(
+            endpoint.pipe(Layer.provide(HttpServer.layerServices)),
+          ),
+        );
+        for (let id = 1; id <= 12; id++) {
+          const response = yield* Effect.promise(
+            async () =>
+              new Promise<Response>((resolve) => {
+                void handler(request(id)).then((answer) => {
+                  runtime.at(runtime.choices.int(21), () => {
+                    resolve(answer);
+                  });
+                });
+              }),
+          );
+          statuses.push(response.status);
+          yield* Effect.promise(async () => response.text());
+        }
+      }),
+    ).pipe(Effect.orDie);
+
+  it("answers an empty 500 over HTTP for seed 1333, and only 200s under the fixed budget", async () => {
+    const statusesOf = async (fixed: boolean) => {
+      const runtime = new SimRuntime(1333);
+      const statuses: number[] = [];
+      const program = calls(runtime, statuses);
+      const { value, tripped } = await withTripwire(async () => {
+        runtime.start(fixed ? withFixedBudget(program) : program);
+        return runtime.run({ stepsMax: 1_000_000, timeMsMax: 3_600_000 }, host);
+      });
+      expect(tripped).toEqual([]);
+      expect(value.kind).toBe("done");
+      return statuses;
+    };
+    expect(await statusesOf(false)).toContain(500);
+    expect(new Set(await statusesOf(true))).toEqual(new Set([200]));
   });
 });

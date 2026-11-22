@@ -19,7 +19,7 @@ import {
   type AnyAction,
   CurrentPrincipal,
   invokeDecoded,
-  type Policy,
+  surfaceServices,
   Principals,
 } from "./action.ts";
 
@@ -85,7 +85,7 @@ export function registrationsOf<R>(
         // dependencies; each handler runs on that context, not the
         // request's (invokeDecoded).
         Effect.gen(function* () {
-          const services = yield* Effect.context<R | Policy>();
+          const services = yield* surfaceServices<R>("mcp");
           return Object.fromEntries(
             actions.map((action) => [
               action.name,

@@ -217,6 +217,23 @@ export function invoke<
   });
 }
 
+// Where a surface reports, once when it is built, the services its handlers
+// will run on. Nothing listens by default; a test listens, to check that a
+// handler runs on exactly those services and on nothing of the request's.
+export const SurfaceServices = Context.Reference<{
+  readonly built: (surface: string, keys: ReadonlyArray<string>) => void;
+}>("action/SurfaceServices", { defaultValue: () => ({ built: () => {} }) });
+
+// The services a surface's handlers run on: the context it is built in.
+export function surfaceServices<R>(surface: string) {
+  return Effect.gen(function* () {
+    const services = yield* Effect.context<R | Policy>();
+    const listener = yield* SurfaceServices;
+    listener.built(surface, [...services.mapUnsafe.keys()]);
+    return services;
+  });
+}
+
 // The entry for a surface whose input reached it as an erased value. The
 // surface has already decoded the input with the action's schema; this checks
 // that it did, where the value is read, and stops loudly if not: a surface

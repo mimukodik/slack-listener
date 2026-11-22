@@ -3,7 +3,12 @@ import { describe, expect, it } from "bun:test";
 import { Cause, Context, Effect, Layer, Logger, Schema } from "effect";
 import fc from "fast-check";
 
-import { defineAction, type Policy, provideAction } from "./action.ts";
+import {
+  defineAction,
+  type Policy,
+  provideAction,
+  SurfaceServices,
+} from "./action.ts";
 import {
   disagreement,
   runAgreement,
@@ -139,7 +144,7 @@ describe("the policy", () => {
     const granted = await kinds(
       inMemoryPolicy({
         ...testGrants,
-        "slack-user-T0000-U0009": [permissions.acknowledge],
+        "slack-user-t0000-u0009": [permissions.acknowledge],
       }),
     );
     expect(granted).toEqual(surfaces.map(() => "success"));
@@ -209,22 +214,12 @@ describe("an unexpected failure", () => {
   });
 });
 
-// A service as text: its JSON where it has one.
-function textOf(service: unknown): string {
-  try {
-    return JSON.stringify(service) ?? "";
-  } catch {
-    return String(service);
-  }
-}
-
 describe("what a handler receives", () => {
   const bearer = "t-alice";
-  const principal = "slack-user-T0000-U0001";
+  const principal = "slack-user-t0000-u0001";
   const seen: Array<{
     readonly principal: string;
     readonly services: readonly string[];
-    readonly leaks: readonly string[];
   }> = [];
   const inspect = defineAction({
     name: "inspect",
@@ -237,19 +232,16 @@ describe("what a handler receives", () => {
     handler: (_input, who) =>
       Effect.gen(function* () {
         const context = yield* Effect.context<never>();
-        const leaks: string[] = [];
-        for (const [key, service] of context.mapUnsafe)
-          if (textOf(service).includes(bearer)) leaks.push(key);
-        seen.push({
-          principal: who,
-          services: [...context.mapUnsafe.keys()],
-          leaks,
-        });
+        seen.push({ principal: who, services: [...context.mapUnsafe.keys()] });
         return { ok: true };
       }),
   });
 
-  it("is the principal, and neither the bearer nor the transport's request", async () => {
+  // The surface whose handlers serve a call: atoms call the REST handlers.
+  const servedBy = { rest: "rest", atom: "rest", mcp: "mcp", direct: "direct" };
+
+  it("is the principal, on exactly the services its surface was built with", async () => {
+    const built = new Map<string, readonly string[]>();
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -264,18 +256,25 @@ describe("what a handler receives", () => {
               surface,
             });
         }),
-      ).pipe(Effect.provide(platformLayer)),
+      ).pipe(
+        Effect.provide(platformLayer),
+        Effect.provideService(SurfaceServices, {
+          built: (surface, keys) => {
+            built.set(surface, keys);
+          },
+        }),
+      ),
     );
     expect(seen).toHaveLength(surfaces.length);
-    for (const each of seen) {
-      expect(each.principal).toBe(principal);
-      expect(each.leaks).toEqual([]);
-      // The request each transport carries the bearer in.
-      expect(each.services).not.toContain("effect/http/HttpServerRequest");
-      expect(each.services).not.toContain(
-        "effect/ai/McpSchema/McpRequestContext",
+    for (const [index, surface] of surfaces.entries()) {
+      const each = seen[index];
+      const expected = built.get(servedBy[surface]);
+      expect(each?.principal).toBe(principal);
+      // Any service the request added, whatever its name, fails this.
+      expect(expected).toBeDefined();
+      expect([...(each?.services ?? [])].sort()).toEqual(
+        [...(expected ?? [])].sort(),
       );
-      expect(each.services).not.toContain("action/CurrentPrincipal");
     }
   });
 });

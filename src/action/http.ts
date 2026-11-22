@@ -26,6 +26,7 @@ import {
   Principals,
   CurrentPrincipal,
   invokeDecoded,
+  surfaceServices,
   type Policy,
 } from "./action.ts";
 
@@ -93,7 +94,7 @@ function handlerOf<R>(
 export function handlersOf<R>(api: Api, actions: ReadonlyArray<AnyAction<R>>) {
   return HttpApiBuilder.group(api, groupName, (handlers) =>
     Effect.gen(function* () {
-      const services = yield* Effect.context<R | Policy>();
+      const services = yield* surfaceServices<R>("rest");
       return handlers.handleAll(
         Object.fromEntries(
           actions.map((action) => [action.name, handlerOf(action, services)]),

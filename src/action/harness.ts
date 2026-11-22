@@ -30,6 +30,7 @@ import {
   type Fields,
   type InputOf,
   invokeDecoded,
+  surfaceServices,
 } from "./action.ts";
 import {
   type AtomClient,
@@ -76,16 +77,16 @@ export type World = {
 // may only read, and a user with no grant. "t-nobody" is a bearer no
 // principal has. The ids are placeholders.
 export const testPrincipals: Readonly<Record<string, Principal>> = {
-  "t-alice": "slack-user-T0000-U0001",
-  "t-carol": "slack-user-T0000-U0002",
-  "t-bob": "slack-channel-C0001",
-  "t-eve": "slack-user-T0000-U0009",
+  "t-alice": "slack-user-t0000-u0001",
+  "t-carol": "slack-user-t0000-u0002",
+  "t-bob": "slack-channel-c0001",
+  "t-eve": "slack-user-t0000-u0009",
 };
 
 export const testGrants = {
-  "slack-user-T0000-U0001": [permissions.read, permissions.acknowledge],
-  "slack-user-T0000-U0002": [permissions.read, permissions.acknowledge],
-  "slack-channel-C0001": [permissions.read],
+  "slack-user-t0000-u0001": [permissions.read, permissions.acknowledge],
+  "slack-user-t0000-u0002": [permissions.read, permissions.acknowledge],
+  "slack-channel-c0001": [permissions.read],
 };
 
 export const bearers = [
@@ -308,6 +309,7 @@ export function makeWorld(
     );
     const builder = yield* Effect.context<Principals | Policy>();
     const principals = yield* Principals;
+    const direct = yield* surfaceServices<never>("direct");
 
     // REST and MCP: one server's handler over the builder's context, behind
     // fetch.
@@ -423,7 +425,7 @@ export function makeWorld(
             if (Exit.isFailure(decoded)) return invalid;
             const principal = principals.authenticate(input.bearer);
             const exit = yield* Effect.exit(
-              invokeDecoded(action, principal, decoded.value, builder),
+              invokeDecoded(action, principal, decoded.value, direct),
             );
             return fromExit(codec, exit, false);
           }

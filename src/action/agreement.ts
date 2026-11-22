@@ -121,9 +121,11 @@ const opsPerTurn = 2048;
 // delay, but no longer where a fiber is preempted: SimRuntime still draws a
 // budget each turn and this scheduler ignores it, so the draws, and with them
 // the rest of the seed's choices, stay as they were. The seeded budget
-// reaches two liveness failures that the fixed one does not (DECISIONS.md,
-// 2026-11-22; pinned in effect-liveness.spec.ts). A narrower floor is not
-// enough: with no budget below 2, seed 216 still stalls a bare MCP server.
+// reaches liveness failures that the fixed one does not (DECISIONS.md,
+// 2026-11-22; pinned in effect-liveness.spec.ts): on this world, 3 of 5000
+// runs failed with an empty MCP 500 under it and none under the fixed one.
+// A narrower floor is not enough: with no budget below 2, seed 216 still
+// stalls a bare McpTest server.
 export function withFixedBudget<A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> {
