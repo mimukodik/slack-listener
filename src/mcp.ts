@@ -7,21 +7,49 @@ import {
   Deferred,
   Effect,
   Queue,
+  Schema,
   Semaphore,
   Stdio,
   Stream,
 } from "effect";
 import type { Scope } from "effect";
 
+import { describeIssue } from "./decode.ts";
+
 export class SinkError extends Data.TaggedError("SinkError")<{
   reason: string;
 }> {}
 
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: number | string;
-  method: string;
-  params?: Record<string, unknown>;
+// A JSON-RPC 2.0 request or notification as MCP sends it (R22): MCP
+// forbids a null id and takes params as an object.
+const RequestId = Schema.Union([Schema.String, Schema.Finite]);
+const JsonRpcRequest = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  id: Schema.optionalKey(RequestId),
+  method: Schema.String,
+  params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+type JsonRpcRequest = typeof JsonRpcRequest.Type;
+const decodeRequest = Schema.decodeUnknownResult(JsonRpcRequest);
+// The id of a line that is not a request, when it has one to answer to.
+const decodeId = Schema.decodeUnknownOption(Schema.Struct({ id: RequestId }));
+const ToolCall = Schema.Struct({
+  name: Schema.String,
+  arguments: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+const decodeToolCall = Schema.decodeUnknownResult(ToolCall);
+
+// JSON-RPC 2.0's codes for a line that does not decode.
+const parseError = -32_700;
+const invalidRequest = -32_600;
+const invalidParams = -32_602;
+
+function parseLine(line: string): { readonly json: unknown } | null {
+  try {
+    return { json: JSON.parse(line) };
+  } catch {
+    return null;
+  }
 }
 
 export interface ChannelServerOptions {
@@ -130,14 +158,37 @@ export class ChannelServer {
     );
   }
 
+  // R22: a line that does not decode is answered with the JSON-RPC error
+  // the spec names, and the server reads on.
+  private refuse(
+    id: string | number | null,
+    code: number,
+    message: string,
+  ): Effect.Effect<void> {
+    return this.options
+      .log(`mcp: answered ${code}: ${message}`)
+      .pipe(
+        Effect.andThen(
+          this.respond({ jsonrpc: "2.0", id, error: { code, message } }),
+        ),
+      );
+  }
+
   private onLine(line: string): Effect.Effect<void> {
     if (line.trim() === "") return Effect.void;
-    let request: JsonRpcRequest;
-    try {
-      request = JSON.parse(line) as JsonRpcRequest;
-    } catch {
-      return this.options.log("mcp: ignored a line that is not JSON");
+    const parsed = parseLine(line);
+    if (parsed === null)
+      return this.refuse(null, parseError, "parse error: the line is not JSON");
+    const decoded = decodeRequest(parsed.json);
+    if (decoded._tag === "Failure") {
+      const id = decodeId(parsed.json);
+      return this.refuse(
+        id._tag === "Some" ? id.value.id : null,
+        invalidRequest,
+        `invalid request: ${describeIssue(decoded.failure)}`,
+      );
     }
+    const request = decoded.success;
     if (request.method === "notifications/initialized")
       return Deferred.succeed(this.initialized, undefined).pipe(
         Effect.andThen(this.options.log("mcp: session initialized")),
@@ -187,17 +238,23 @@ export class ChannelServer {
         id,
         result: { content: [{ type: "text", text }], isError },
       });
-    if (request.params?.name !== doneTool.name)
+    const params = decodeToolCall(request.params ?? {});
+    if (params._tag === "Failure")
+      return this.refuse(
+        id ?? null,
+        invalidParams,
+        `invalid params: ${describeIssue(params.failure)}`,
+      );
+    if (params.success.name !== doneTool.name)
       return this.respond({
         jsonrpc: "2.0",
         id,
         error: {
-          code: -32602,
-          message: `unknown tool: ${String(request.params?.name)}`,
+          code: invalidParams,
+          message: `unknown tool: ${params.success.name}`,
         },
       });
-    const args = request.params.arguments as { ts?: unknown } | undefined;
-    const ts = args?.ts;
+    const ts = params.success.arguments?.ts;
     if (typeof ts !== "string" || !slackTs.test(ts))
       return answer(
         "done needs the message's ts, such as 1795099386.438339.",

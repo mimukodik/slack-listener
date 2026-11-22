@@ -23,6 +23,7 @@ import {
   FileSystem,
   Queue,
   Schedule,
+  Schema,
 } from "effect";
 import type { Scope } from "effect";
 import { Socket } from "effect/socket";
@@ -40,6 +41,7 @@ import {
   type State,
   type TimerName,
 } from "./core.ts";
+import { describeIssue } from "./decode.ts";
 import {
   parentFrom,
   parentInfo,
@@ -49,8 +51,13 @@ import {
 } from "./format.ts";
 import type { Log } from "./log.ts";
 import type { ChannelServer } from "./mcp.ts";
-import { redact, type SlackApi } from "./slack-api.ts";
-import { msToTs, type SlackMessage } from "./slack.ts";
+import { redact, type CatchUpPage, type SlackApi } from "./slack-api.ts";
+import {
+  msToTs,
+  SlackMessageSchema,
+  SlackTs,
+  type SlackMessage,
+} from "./slack.ts";
 
 export class StateFileError extends Data.TaggedError("StateFileError")<{
   reason: string;
@@ -95,31 +102,18 @@ export function readSaved(
       ),
     );
     if (text === null) return null;
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(text) as SavedFile,
+    const json = yield* Effect.try({
+      try: (): unknown => JSON.parse(text),
       catch: () => new StateFileError({ reason: `${path} is not JSON` }),
     });
-    if (parsed.version !== 1)
+    // R19: a file this listener could not have written stops it here,
+    // before it connects; the reason names the field, never the text.
+    const decoded = decodeSavedFile(json);
+    if (decoded._tag === "Failure")
       return yield* new StateFileError({
-        reason: `${path} has version ${String(parsed.version)}, expected 1`,
+        reason: `${path} ${describeIssue(decoded.failure, savedMaps)}`,
       });
-    const saved: Saved = {
-      version: 1,
-      caughtUpUntilMs: Number(parsed.caughtUpUntilMs),
-      floorMs: Number(parsed.floorMs),
-      claimed: parsed.claimed ?? {},
-      queue: parsed.queue ?? [],
-      inflight: parsed.inflight ?? null,
-      held: parsed.held ?? [],
-      reactions: (parsed.reactions ?? []).map((reaction) => ({
-        ...reaction,
-        mark: reaction.mark ?? "seen",
-      })),
-      reacted: parsed.reacted ?? {},
-      handled: parsed.handled ?? {},
-      answered: parsed.answered ?? {},
-      marked: parsed.marked ?? {},
-    };
+    const saved: Saved = decoded.success;
     return saved;
   });
 }
@@ -146,12 +140,38 @@ function writeSaved(
   );
 }
 
-interface SocketEnvelope {
-  type?: string;
-  envelope_id?: string;
-  reason?: string;
-  payload?: { event?: SlackMessage };
-}
+// A Socket Mode frame, decoded once where it arrives (R20). An envelope
+// carries an id Slack expects back; one whose event does not decode is still
+// acknowledged, with no message, so Slack does not send it again.
+export type Frame =
+  | { readonly kind: "hello" }
+  | { readonly kind: "disconnect"; readonly reason: string }
+  | {
+      readonly kind: "envelope";
+      readonly envelopeId: string;
+      readonly message: SlackMessage | null;
+      readonly undecoded: string | null;
+    }
+  | { readonly kind: "other" }
+  | { readonly kind: "undecoded"; readonly why: string };
+
+const FrameHead = Schema.Struct({
+  type: Schema.optionalKey(Schema.String),
+  envelope_id: Schema.optionalKey(Schema.String),
+});
+const DisconnectFrame = Schema.Struct({ reason: Schema.String });
+const EventType = Schema.Struct({
+  payload: Schema.Struct({
+    event: Schema.Struct({ type: Schema.optionalKey(Schema.String) }),
+  }),
+});
+const MessageEvent = Schema.Struct({
+  payload: Schema.Struct({ event: SlackMessageSchema }),
+});
+const decodeFrameHead = Schema.decodeUnknownResult(FrameHead);
+const decodeDisconnect = Schema.decodeUnknownOption(DisconnectFrame);
+const decodeEventType = Schema.decodeUnknownResult(EventType);
+const decodeMessageEvent = Schema.decodeUnknownResult(MessageEvent);
 
 // The open connection the core may ack on; ended is done once it closed, so
 // an ack never waits on a socket that will not open again.
@@ -163,11 +183,68 @@ interface Live {
 
 const decoder = new TextDecoder();
 
-// The state file as read. A file written before R18's check mark has no
-// mark on its queued reaction calls; reading it treats them as the seen mark.
-type SavedFile = Partial<Omit<Saved, "reactions">> & {
-  reactions?: (Omit<Reaction, "mark"> & { mark?: Reaction["mark"] })[];
-};
+// The state file as read (R19). Every field version 1 had from the start is
+// required. R18 added the reaction fields later: a file written before them
+// reads them as empty, and a queued reaction call written before the check
+// mark, without a mark, as a seen one. readSaved assigns the result to Saved,
+// so a field added to Saved and not here fails to compile.
+const DeliverySchema = Schema.Struct({
+  key: Schema.String,
+  kind: Schema.Literals(["message", "edit"]),
+  channel: Schema.String,
+  ts: SlackTs,
+  threadTs: SlackTs,
+  isReply: Schema.Boolean,
+  user: Schema.String,
+  text: Schema.String,
+  postedAtMs: Schema.Finite,
+  editedAtMs: Schema.NullOr(Schema.Finite),
+  possibleDuplicate: Schema.Boolean,
+});
+
+const ReactionSchema = Schema.Struct({
+  action: Schema.Literals(["add", "remove"]),
+  mark: Schema.Literals(["seen", "handled"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("seen" as const)),
+  ),
+  ts: SlackTs,
+});
+
+const SavedFile = Schema.Struct({
+  version: Schema.Literal(1),
+  caughtUpUntilMs: Schema.Finite,
+  floorMs: Schema.Finite,
+  claimed: Schema.Record(Schema.String, Schema.Finite),
+  queue: Schema.mutable(Schema.Array(DeliverySchema)),
+  inflight: Schema.NullOr(DeliverySchema),
+  held: Schema.mutable(
+    Schema.Array(
+      Schema.Struct({
+        message: SlackMessageSchema,
+        arrivedAtMs: Schema.Finite,
+      }),
+    ),
+  ),
+  reactions: Schema.mutable(Schema.Array(ReactionSchema)).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  reacted: Schema.Record(Schema.String, SlackTs).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
+  handled: Schema.Record(Schema.String, Schema.Finite).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
+  answered: Schema.Record(Schema.String, SlackTs).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
+  marked: Schema.Record(Schema.String, Schema.Finite).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
+});
+
+const decodeSavedFile = Schema.decodeUnknownResult(SavedFile);
+// The state file's maps, whose keys an error does not show (R19).
+const savedMaps = ["claimed", "reacted", "handled", "answered", "marked"];
 
 // R8: the wait before each try of a run starts at 1 second and doubles, up
 // to maxBackoffMs. The core says which run a failed try belongs to and when a
@@ -193,12 +270,63 @@ const reactionDone = new Set([
   "message_not_found",
 ]);
 
-function parseFrame(data: string): SocketEnvelope | null {
+function parseJson(data: string): { readonly json: unknown } | null {
   try {
-    return JSON.parse(data) as SocketEnvelope;
+    return { json: JSON.parse(data) };
   } catch {
     return null;
   }
+}
+
+// An envelope's event: a message, or null for any other event (R20).
+function envelopeOf(envelopeId: string, json: unknown): Frame {
+  const event = decodeEventType(json);
+  if (event._tag === "Failure")
+    return {
+      kind: "envelope",
+      envelopeId,
+      message: null,
+      undecoded: describeIssue(event.failure),
+    };
+  if (event.success.payload.event.type !== "message")
+    return { kind: "envelope", envelopeId, message: null, undecoded: null };
+  const message = decodeMessageEvent(json);
+  return message._tag === "Failure"
+    ? {
+        kind: "envelope",
+        envelopeId,
+        message: null,
+        undecoded: describeIssue(message.failure),
+      }
+    : {
+        kind: "envelope",
+        envelopeId,
+        message: message.success.payload.event,
+        undecoded: null,
+      };
+}
+
+export function decodeFrame(data: string): Frame {
+  const parsed = parseJson(data);
+  if (parsed === null) return { kind: "undecoded", why: "is not JSON" };
+  const head = decodeFrameHead(parsed.json);
+  if (head._tag === "Failure")
+    return { kind: "undecoded", why: describeIssue(head.failure) };
+  const { type, envelope_id: envelopeId } = head.success;
+  if (type === "hello") return { kind: "hello" };
+  // Slack closes the socket after a disconnect frame whatever its reason
+  // says, so a reason that does not decode still reconnects.
+  if (type === "disconnect") {
+    const reason = decodeDisconnect(parsed.json);
+    return {
+      kind: "disconnect",
+      reason: reason._tag === "Some" ? reason.value.reason : "no reason",
+    };
+  }
+  if (envelopeId === undefined) return { kind: "other" };
+  if (type !== "events_api")
+    return { kind: "envelope", envelopeId, message: null, undecoded: null };
+  return envelopeOf(envelopeId, parsed.json);
 }
 
 function frameText(frame: string | Uint8Array): string {
@@ -362,32 +490,32 @@ export function runShell(
       ): Effect.Effect<"reconnect" | "continue"> =>
         Effect.gen(function* () {
           yield* record(data);
-          const frame = parseFrame(data);
-          if (frame === null) {
-            yield* log("slack sent a frame that is not JSON");
-            return "continue";
+          const frame = decodeFrame(data);
+          switch (frame.kind) {
+            case "undecoded":
+              yield* log(`slack sent a frame that ${frame.why}`);
+              return "continue";
+            case "hello":
+              yield* dispatch({ type: "hello", generation });
+              return "continue";
+            case "disconnect":
+              yield* log(`slack asked to reconnect: ${frame.reason}`);
+              return "reconnect";
+            case "other":
+              return "continue";
+            case "envelope":
+              if (frame.undecoded !== null)
+                yield* log(
+                  `slack sent envelope ${frame.envelopeId} that ${frame.undecoded}; acknowledged, not delivered`,
+                );
+              yield* dispatch({
+                type: "envelope",
+                generation,
+                envelopeId: frame.envelopeId,
+                message: frame.message,
+              });
+              return "continue";
           }
-          if (frame.type === "hello") {
-            yield* dispatch({ type: "hello", generation });
-            return "continue";
-          }
-          if (frame.type === "disconnect") {
-            yield* log(
-              `slack asked to reconnect: ${frame.reason ?? "no reason"}`,
-            );
-            return "reconnect";
-          }
-          if (frame.envelope_id === undefined) return "continue";
-          const event =
-            frame.type === "events_api" ? frame.payload?.event : undefined;
-          yield* dispatch({
-            type: "envelope",
-            generation,
-            envelopeId: frame.envelope_id,
-            message:
-              event !== undefined && event.type === "message" ? event : null,
-          });
-          return "continue";
         });
 
       // The connection is over: no ack may wait on it.
@@ -445,24 +573,35 @@ export function runShell(
 
       const fetchInto = (
         catchUpId: number,
-        program: Effect.Effect<
-          SlackMessage[],
-          { reason: string; method: string }
-        >,
-        toEvent: (messages: SlackMessage[]) => CoreEvent,
+        program: Effect.Effect<CatchUpPage, { reason: string; method: string }>,
+        toEvent: (page: CatchUpPage) => CoreEvent,
       ): Effect.Effect<void> =>
         FiberSet.run(
           tasks,
           program.pipe(
             Effect.match({
-              onFailure: (error): CoreEvent => ({
-                type: "fetch_failed",
-                catchUpId,
-                reason: `${error.method}: ${error.reason}`,
+              onFailure: (error) => ({
+                event: {
+                  type: "fetch_failed",
+                  catchUpId,
+                  reason: `${error.method}: ${error.reason}`,
+                } satisfies CoreEvent,
+                skipped: [],
               }),
-              onSuccess: toEvent,
+              onSuccess: (page) => ({
+                event: toEvent(page),
+                skipped: page.skipped,
+              }),
             }),
-            Effect.flatMap(dispatch),
+            // R21: a message the page held that does not decode is logged
+            // and left out; the rest of the read goes on to the core.
+            Effect.flatMap(({ event, skipped }) =>
+              skipped.length === 0
+                ? dispatch(event)
+                : Effect.forEach(skipped, (line) =>
+                    log(`catch-up skipped ${line}`),
+                  ).pipe(Effect.andThen(dispatch(event))),
+            ),
           ),
         ).pipe(Effect.asVoid);
 
@@ -607,10 +746,11 @@ export function runShell(
             return fetchInto(
               effect.catchUpId,
               api.history(config.core.channel, msToTs(effect.oldestMs)),
-              (messages) => ({
+              ({ messages, threads }) => ({
                 type: "history_loaded",
                 catchUpId: effect.catchUpId,
                 messages,
+                threads,
               }),
             );
           case "fetch_replies":
@@ -621,7 +761,8 @@ export function runShell(
                 effect.threadTs,
                 msToTs(effect.oldestMs),
               ),
-              (messages) => ({
+              // A reply heads no thread, so a skipped one gives none.
+              ({ messages }) => ({
                 type: "replies_loaded",
                 catchUpId: effect.catchUpId,
                 threadTs: effect.threadTs,

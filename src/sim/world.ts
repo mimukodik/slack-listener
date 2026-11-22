@@ -60,7 +60,22 @@ type Envelope = {
   message: SlackMessage;
   sentOn: number | null;
   attempts: number;
+  // R20: an event the listener cannot decode, sent in place of message.
+  malformed?: object;
 };
+
+// R20: frames the listener cannot decode and that carry no envelope id.
+const malformedFrames = [
+  "not json {",
+  "null",
+  '"a frame"',
+  "[1]",
+  '{"type":5}',
+  '{"type":"events_api","envelope_id":7,"payload":{}}',
+] as const;
+
+// R21: Web API answers that do not decode as a whole.
+const malformedAnswers = ["not json {", "null", "{}", '{"ok":"yes"}'] as const;
 
 class WorldSocket implements Socket.WebSocketLike {
   readyState = 0;
@@ -80,6 +95,7 @@ class WorldSocket implements Socket.WebSocketLike {
         this.readyState = 1;
         this.emit("open", {});
         world.answer(() => {
+          this.lastFrameAtMs = world.runtime.nowMs;
           this.emit("message", { data: JSON.stringify({ type: "hello" }) });
           world.hello(this);
         }, 10);
@@ -106,16 +122,58 @@ class WorldSocket implements Socket.WebSocketLike {
     for (const listener of this.listeners.get(type) ?? [])
       listener(event as Socket.WebSocketEvent);
   }
-  frame(frame: object, delay = 0): void {
+  // onArrived runs when the frame reaches the listener, not when a closed
+  // socket drops it.
+  frame(frame: object, delay = 0, onArrived?: () => void): void {
+    this.raw(JSON.stringify(frame), delay, false, onArrived);
+  }
+  // When the latest frame arrived, and the latest frame that does not
+  // decode, for R20's check below.
+  private lastFrameAtMs: number | null = null;
+  private malformedAtMs: number | null = null;
+  malformed(data: string, delay = 0): void {
+    this.raw(data, delay, true);
+  }
+  private raw(
+    data: string,
+    delay: number,
+    malformed = false,
+    onArrived?: () => void,
+  ): void {
     if (this.epoch !== this.world.runtime.epoch) return;
     this.world.answer(() => {
-      if (this.readyState === 1)
-        this.emit("message", { data: JSON.stringify(frame) });
+      if (this.readyState !== 1) return;
+      onArrived?.();
+      const now = this.world.runtime.nowMs;
+      // A frame that comes after a silence past the idle limit, as one
+      // does on waking from sleep, may meet the listener's idle reconnect
+      // (R8) in the same moment; that close is not the frame's doing.
+      if (malformed)
+        this.malformedAtMs =
+          this.lastFrameAtMs !== null &&
+          now - this.lastFrameAtMs > simConfig().idleReconnectMs
+            ? null
+            : now;
+      this.lastFrameAtMs = now;
+      this.emit("message", { data });
     }, delay);
   }
+  // The listener closes with 1000 and the world with 1006. R20: the
+  // connection goes on after a frame that does not decode, so the listener
+  // closing it within 100 ms is a violation.
   close(code = 1000): void {
     if (this.readyState === 3 || this.epoch !== this.world.runtime.epoch)
       return;
+    // A close of a socket the world already closed is the listener's
+    // cleanup, not its choice, so only an open socket counts.
+    if (
+      code === 1000 &&
+      this.malformedAtMs !== null &&
+      this.world.runtime.nowMs - this.malformedAtMs <= 100
+    )
+      this.world.violation(
+        `R20: the listener ended the connection ${this.world.runtime.nowMs - this.malformedAtMs} ms after a frame that does not decode`,
+      );
     this.readyState = 3;
     this.world.answer(() =>
       this.emit("close", { code, reason: "simulated close" }),
@@ -199,6 +257,12 @@ export class World {
     reactionsRemoved: 0,
     reactionFaults: 0,
     doneMarks: 0,
+    malformedFrames: 0,
+    malformedEnvelopes: 0,
+    malformedAnswers: 0,
+    malformedLines: 0,
+    unreadableInCatchUp: 0,
+    repliesUnderUnreadable: 0,
   };
   private readonly checker: SafetyChecker;
   private readonly config: ListenerConfig = {
@@ -219,7 +283,7 @@ export class World {
   private envelopeCounter = 0;
   private lastEnvelope: Envelope | null = null;
   private lastArrivalTs = new Map<number, string>();
-  private readonly pages = new Map<string, SlackMessage[]>();
+  private readonly pages = new Map<string, readonly object[]>();
   private cursorCounter = 0;
   private stdin: Queue.Queue<Uint8Array, Cause.Done> | null = null;
   private running = false;
@@ -251,6 +315,27 @@ export class World {
   private readonly markCalls = new Map<number, string>();
   private sessionMarks = false;
   private markId = 100;
+  // R20: the ts of each envelope sent with a message that does not decode,
+  // and, by envelope id, how often one reached the listener and how often
+  // the listener acknowledged it.
+  private readonly malformedTs = new Set<string>();
+  private readonly malformedArrivals = new Map<string, number>();
+  private readonly malformedAcks = new Map<string, number>();
+  private malformedCounter = 0;
+  // R21: messages in the watched channel's history that do not decode, by
+  // ts, newest last. Each also went out live as an envelope that does not
+  // decode if the listener was connected; neither may ever be delivered.
+  // canHead: whether its ts, reply_count and latest_reply decode, so a
+  // catch-up can still read its thread; only such a message gets replies.
+  private readonly unreadable = new Map<
+    string,
+    { event: object; canHead: boolean }
+  >();
+  // R22: the JSON-RPC error each bad session line awaits, by its id, and in
+  // order for the lines answered with a null id.
+  private readonly badLines = new Map<string, number>();
+  private readonly badNullLines: number[] = [];
+  private badLineCounter = 0;
   private readonly expectedParents = new Map<
     string,
     { text: string; user: string; configured: boolean }
@@ -281,6 +366,12 @@ export class World {
 
   touch(): void {
     this.lastIoMs = this.now;
+  }
+  // A violation found where a throw would reach the program as a failed
+  // call or a defect, and fail the run under another name; the run fails
+  // with this one.
+  violation(message: string): void {
+    this.failure ??= `SafetyViolation: ${message}`;
   }
   answer(fire: () => void, delay = 1): () => void {
     this.pending += 1;
@@ -325,6 +416,7 @@ export class World {
               this.touch();
               if (this.sinkFailing) {
                 this.coverage.sinkFailures += 1;
+                this.lostAnswers(chunk);
                 return false;
               }
               if (this.options.control !== "nothing") {
@@ -488,7 +580,7 @@ export class World {
                 (this.outage || (this.faultsOn && this.choices.chance(10))))
             ) {
               this.coverage.apiFailures += 1;
-              reject(new Error("simulated network failure"));
+              this.failCall(resolve, reject);
               return;
             }
             if (
@@ -501,7 +593,7 @@ export class World {
               const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
               this.slack.reactionFailures.set(call, failures);
               if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
-              reject(new Error("simulated network failure"));
+              this.failCall(resolve, reject);
               return;
             }
             if (method.startsWith("reactions."))
@@ -540,6 +632,27 @@ export class World {
     },
   );
 
+  // A failed call: the network fails, or, in a sampled run, Slack answers
+  // with a body that does not decode as a whole (R21). Either way the call
+  // changed nothing at Slack, and the listener must treat it as failed and
+  // retry it as one: the R8, R18 and R7 checks see a call it did not retry.
+  private failCall(
+    resolve: (response: Response) => void,
+    reject: (error: Error) => void,
+  ): void {
+    if (!this.faultsOn || !this.choices.chance(25)) {
+      reject(new Error("simulated network failure"));
+      return;
+    }
+    this.coverage.malformedAnswers += 1;
+    resolve(
+      new Response(this.choices.pick([...malformedAnswers]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }
+
   // The exhaustive pass's f, taken by the first failable call after it.
   private takeFailure(method: string, params: URLSearchParams): boolean {
     if (!this.failNext || !failable(method, params)) return false;
@@ -570,15 +683,34 @@ export class World {
         };
       case "conversations.history":
         return this.page(
-          this.slack.history(
-            params.get("channel") ?? "",
-            params.get("oldest") ?? "0",
+          this.withUnreadable(
+            this.slack.history(
+              params.get("channel") ?? "",
+              params.get("oldest") ?? "0",
+            ),
+            params,
           ),
           params,
         );
       case "conversations.replies": {
         this.coverage.repliesFetched += 1;
         const ts = params.get("ts") ?? "";
+        // R21: a thread under a parent that does not decode: Slack answers
+        // with that parent first, as it does with any parent.
+        if (this.unreadable.has(ts))
+          return params.get("limit") === "1"
+            ? { ok: true, messages: [this.unreadableEvent(ts)] }
+            : this.page(
+                [
+                  this.unreadableEvent(ts),
+                  ...this.slack.replies(
+                    params.get("channel") ?? "",
+                    ts,
+                    params.get("oldest") ?? "0",
+                  ),
+                ],
+                params,
+              );
         if (params.get("limit") === "1") {
           const parent = this.slack.messages.get(ts);
           if (
@@ -680,22 +812,59 @@ export class World {
     return answer;
   }
 
-  private page(messages: SlackMessage[], params: URLSearchParams): object {
+  // R21: the history Slack holds, newest first, with the messages in it that
+  // do not decode. Only a first read takes them in; a later page comes from
+  // the cursor.
+  private withUnreadable(
+    messages: SlackMessage[],
+    params: URLSearchParams,
+  ): readonly object[] {
+    if (
+      params.get("channel") !== watchedChannel ||
+      params.has("cursor") ||
+      this.unreadable.size === 0
+    )
+      return messages;
+    const oldest = params.get("oldest") ?? "0";
+    const entries: { ts: string; item: object }[] = messages.map((item) => ({
+      ts: item.ts,
+      item,
+    }));
+    for (const ts of this.unreadable.keys())
+      if (compareTs(ts, oldest) >= 0)
+        entries.push({ ts, item: this.unreadableEvent(ts) });
+    return entries
+      .sort((a, b) => compareTs(b.ts, a.ts))
+      .map((entry) => entry.item);
+  }
+
+  private page(messages: readonly object[], params: URLSearchParams): object {
     const cursor = params.get("cursor");
     const all = cursor === null ? messages : this.pages.get(cursor);
     if (all === undefined) throw new Error("unknown fake Slack cursor");
     const size = 3;
     const next = all.length > size ? `cursor-${++this.cursorCounter}` : "";
     if (next !== "") this.pages.set(next, all.slice(size));
+    const served = all.slice(0, size);
+    if (
+      served.some(
+        (item) =>
+          "ts" in item &&
+          typeof item.ts === "string" &&
+          this.unreadable.has(item.ts),
+      )
+    )
+      this.coverage.unreadableInCatchUp += 1;
     return {
       ok: true,
-      messages: all.slice(0, size),
+      messages: served,
       response_metadata: { next_cursor: next },
     };
   }
 
   private output(line: {
-    id?: number;
+    id?: number | string | null;
+    error?: { code?: number };
     method?: string;
     params?: { content: string; meta: Record<string, string> };
     result?: {
@@ -703,10 +872,14 @@ export class World {
       isError?: boolean;
     };
   }): void {
-    const markedTs =
-      line.id === undefined ? undefined : this.markCalls.get(line.id);
+    if (line.error !== undefined) {
+      this.badLineAnswered(line.id ?? null, line.error.code);
+      return;
+    }
+    const markId = typeof line.id === "number" ? line.id : -1;
+    const markedTs = this.markCalls.get(markId);
     if (markedTs !== undefined && line.result !== undefined) {
-      this.markCalls.delete(line.id ?? -1);
+      this.markCalls.delete(markId);
       if (line.result.isError === true)
         throw new SafetyViolation(
           `R18: done for delivered ${markedTs} was refused`,
@@ -756,6 +929,10 @@ export class World {
     if (/x(?:ox[a-z]|app)-[A-Za-z0-9-]+/.test(JSON.stringify(line)))
       throw new SafetyViolation("R6: token in stdout");
     this.options.trace?.push(`${this.now} stdout ${JSON.stringify(meta)}`);
+    if (this.malformedTs.has(delivery.ts))
+      this.violation(
+        `R20: delivered ${delivery.ts}, whose event does not decode`,
+      );
     this.checker.onDelivery(delivery, content, meta);
     this.session.push({
       delivery,
@@ -771,6 +948,8 @@ export class World {
     if (delivery.isReply) this.checkParent(delivery, meta);
     if (delivery.kind === "edit") this.coverage.editsDelivered += 1;
     if (delivery.isReply) this.coverage.threadRepliesDelivered += 1;
+    if (delivery.isReply && this.unreadable.has(delivery.threadTs))
+      this.coverage.repliesUnderUnreadable += 1;
     if (this.slack.messages.get(delivery.ts)?.broadcast === true)
       this.coverage.broadcastsDelivered += 1;
     if (
@@ -779,6 +958,8 @@ export class World {
       this.choices.chance(20)
     )
       this.markDone(delivery.ts, this.choices.between(0, 5000));
+    if (this.sessionMarks && this.faultsOn && this.choices.chance(10))
+      this.sendBadLine(this.choices.between(0, 5000));
     if (this.crashArmed) {
       this.crashArmed = false;
       // Crash in the gap after the write, before its callback can reach shell.
@@ -804,6 +985,70 @@ export class World {
         Queue.offer(stdin, encoder.encode(`${JSON.stringify(call)}\n`)),
       );
     }, delay);
+  }
+  // R22: the session sends a line that does not decode; the listener must
+  // answer it with the JSON-RPC error its kind names and read on.
+  private sendBadLine(delay: number): void {
+    const epoch = this.runtime.epoch;
+    const stdin = this.stdin;
+    const id = `bad-${++this.badLineCounter}`;
+    const [line, code, answeredId] = this.choices.pick<
+      [string, number, string | null]
+    >([
+      ['{"jsonrpc":"2.0",', -32_700, null],
+      ["null", -32_600, null],
+      [JSON.stringify({ jsonrpc: "2.0", id }), -32_600, id],
+      [JSON.stringify({ jsonrpc: "2.0", id, method: 5 }), -32_600, id],
+      [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "done", arguments: "not an object" },
+        }),
+        -32_602,
+        id,
+      ],
+    ]);
+    this.answer(() => {
+      if (epoch !== this.runtime.epoch || stdin === null) return;
+      this.coverage.malformedLines += 1;
+      if (answeredId === null) this.badNullLines.push(code);
+      else this.badLines.set(answeredId, code);
+      Effect.runSync(Queue.offer(stdin, encoder.encode(`${line}\n`)));
+    }, delay);
+  }
+  private badLineAnswered(id: number | string | null, code?: number): void {
+    const expected =
+      id === null
+        ? this.badNullLines.shift()
+        : typeof id === "string"
+          ? this.badLines.get(id)
+          : undefined;
+    if (typeof id === "string") this.badLines.delete(id);
+    if (expected === undefined)
+      this.violation(
+        `R22: an error answer to ${String(id)} that no bad line asked for`,
+      );
+    else if (code !== expected)
+      this.violation(
+        `R22: answered ${String(id)} with ${String(code)}, expected ${expected}`,
+      );
+  }
+  // A write to the session that failed: an answer to a bad line in it is
+  // lost, not missing.
+  private lostAnswers(chunk: string | Uint8Array): void {
+    const text = typeof chunk === "string" ? chunk : decoder.decode(chunk);
+    for (const part of text.split("\n")) {
+      if (part.trim() === "") continue;
+      const line = JSON.parse(part) as {
+        id?: number | string | null;
+        error?: object;
+      };
+      if (line.error === undefined) continue;
+      if (line.id === null || line.id === undefined) this.badNullLines.shift();
+      else if (typeof line.id === "string") this.badLines.delete(line.id);
+    }
   }
   // The exhaustive pass's m targets the latest message handed to the session
   // that it has not marked done. A message handed over before a crash counts:
@@ -854,6 +1099,20 @@ export class World {
   }
   ack(socket: WorldSocket, id: string): void {
     this.touch();
+    // R20: an envelope whose event does not decode is acknowledged once
+    // each time it reaches the listener, never more: Slack can send it
+    // again before the first ack, as hello's resend does. Thrown here, the
+    // violation would only fail the listener's write, which it ignores; the
+    // run fails instead.
+    const arrivals = this.malformedArrivals.get(id);
+    if (arrivals !== undefined) {
+      const acks = (this.malformedAcks.get(id) ?? 0) + 1;
+      this.malformedAcks.set(id, acks);
+      if (acks > arrivals)
+        this.violation(
+          `R20: acknowledged ${id} ${acks} times, sent ${arrivals} times`,
+        );
+    }
     const envelope = this.envelopes.get(id);
     if (envelope === undefined) return; // a duplicate frame can produce a second ack
     if (envelope.sentOn !== socket.id)
@@ -878,6 +1137,35 @@ export class World {
   ): void {
     envelope.attempts += 1;
     envelope.sentOn = socket.id;
+    const malformed = envelope.malformed;
+    if (malformed !== undefined) {
+      this.malformedArrivals.set(
+        envelope.id,
+        this.malformedArrivals.get(envelope.id) ?? 0,
+      );
+      this.answer(() => {
+        if (socket.readyState !== 1 || this.outage) return;
+        socket.frame(
+          {
+            type: "events_api",
+            envelope_id: envelope.id,
+            payload: { event: malformed },
+          },
+          0,
+          () =>
+            this.malformedArrivals.set(
+              envelope.id,
+              (this.malformedArrivals.get(envelope.id) ?? 0) + 1,
+            ),
+        );
+      }, delay);
+      return;
+    }
+    // R20: a frame that does not decode, now and then, before an envelope.
+    if (this.faultsOn && this.choices.chance(3)) {
+      this.coverage.malformedFrames += 1;
+      socket.malformed(this.choices.pick(malformedFrames), delay);
+    }
     this.answer(() => {
       if (socket.readyState !== 1 || this.outage) return;
       const last = this.lastArrivalTs.get(socket.id);
@@ -892,6 +1180,7 @@ export class World {
     }, delay);
   }
   private emit(message: SlackMessage): void {
+    if (this.faultsOn && this.choices.chance(3)) this.postUnreadable();
     if (!this.connected || !this.running) {
       this.coverage.postsWhileDisconnected += 1;
       this.markMissedEdit(message);
@@ -919,6 +1208,7 @@ export class World {
         this.latency(0, 2500),
       );
     }
+    if (this.faultsOn && this.choices.chance(4)) this.emitMalformed(socket);
     if (this.options.control === "everything")
       this.output({
         method: "notifications/claude/channel",
@@ -936,6 +1226,85 @@ export class World {
         },
       });
   }
+  // R21: a message Slack keeps in the watched channel's history that the
+  // listener cannot read; the reviewer's probe was a bot message whose
+  // bot_id is null. A catch-up page holding it must still be read, its
+  // other messages delivered, and it never.
+  private postUnreadable(): void {
+    const ts = this.slack.nextTs(this.now);
+    this.malformedTs.add(ts);
+    const base = {
+      type: "message",
+      channel: watchedChannel,
+      user: people.other,
+      text: "does not decode",
+      ts,
+    };
+    const [event, canHead] = this.choices.pick<[object, boolean]>([
+      [{ ...base, bot_id: null }, true],
+      [{ ...base, text: 5 }, true],
+      [{ ...base, reply_count: "2" }, false],
+      [{ ...base, edited: { user: people.other } }, true],
+    ]);
+    this.unreadable.set(ts, { event, canHead });
+    const socket = this.socket;
+    if (this.connected && this.running && socket !== null)
+      this.sendMalformed(socket, ts, event);
+  }
+  // The message as Slack's history shows it: with its thread's count and
+  // latest reply once it has replies.
+  private unreadableEvent(ts: string): object {
+    const entry = this.unreadable.get(ts);
+    assert(entry !== undefined, `${ts} is not an unreadable message`);
+    const replies = this.slack.replies(watchedChannel, ts, "0");
+    const latest = replies.at(-1);
+    return latest === undefined
+      ? entry.event
+      : {
+          ...entry.event,
+          thread_ts: ts,
+          reply_count: replies.length,
+          latest_reply: latest.ts,
+        };
+  }
+  // R20: an envelope whose message event does not decode. Its ts is never
+  // stored at Slack, so no catch-up reads it, and it must never be handed
+  // to the session; the listener acknowledges it once per send.
+  private emitMalformed(socket: WorldSocket): void {
+    const ts = this.slack.nextTs(this.now);
+    this.malformedTs.add(ts);
+    const base = {
+      type: "message",
+      channel: watchedChannel,
+      user: people.other,
+      text: "does not decode",
+    };
+    const event = this.choices.pick<object>([
+      base,
+      { ...base, ts, text: 5 },
+      { ...base, ts: Number(ts) },
+      {
+        type: "message",
+        subtype: "message_changed",
+        channel: watchedChannel,
+        ts,
+        message: { ...base, ts, edited: { user: people.other } },
+      },
+    ]);
+    this.sendMalformed(socket, ts, event);
+  }
+  private sendMalformed(socket: WorldSocket, ts: string, event: object): void {
+    this.coverage.malformedEnvelopes += 1;
+    const envelope: Envelope = {
+      id: `env-bad-${++this.malformedCounter}`,
+      message: { type: "malformed", ts },
+      attempts: 0,
+      sentOn: null,
+      malformed: event,
+    };
+    this.envelopes.set(envelope.id, envelope);
+    this.sendEnvelope(socket, envelope, this.latency(0, 2500));
+  }
   private markMissedEdit(message: SlackMessage): void {
     if (message.subtype !== "message_changed") return;
     const target = this.slack.messages.get(message.message?.ts ?? "");
@@ -948,6 +1317,9 @@ export class World {
     if (this.pending > 0) this.coverage.crashesWithInflight += 1;
     this.runtime.crash();
     this.running = false;
+    // R22: lines the stopped process did not answer are not owed.
+    this.badLines.clear();
+    this.badNullLines.length = 0;
     this.socket = null;
     this.pending = 0;
     this.outage = false;
@@ -1045,16 +1417,25 @@ export class World {
   }
 
   private reply(): void {
+    // R21 with R7: a reply in the thread of a parent that does not decode.
+    const unreadableParents = [...this.unreadable]
+      .filter(([, entry]) => entry.canHead)
+      .map(([ts]) => ts);
+    const underUnreadable =
+      this.faultsOn && unreadableParents.length > 0 && this.choices.chance(20)
+        ? this.choices.pick(unreadableParents)
+        : null;
     const parents = this.watchedMessages((m) => !this.slack.inThread(m));
-    if (parents.length === 0) return this.postTopLevel();
-    const parent = this.choices.pick(parents);
+    if (parents.length === 0 && underUnreadable === null)
+      return this.postTopLevel();
+    const parentTs = underUnreadable ?? this.choices.pick(parents).ts;
     const label = this.randomAuthor();
     const broadcast = this.choices.chance(15);
     this.store({
       channel: watchedChannel,
       author: authors[label],
       ts: this.slack.nextTs(this.now),
-      threadTs: parent.ts,
+      threadTs: parentTs,
       broadcast,
       text: this.text(`reply ${this.steps} by ${label}`),
       editedTs: undefined,
@@ -1166,7 +1547,12 @@ export class World {
       const unacked = [...this.envelopes.values()].some(
         (envelope) => envelope.sentOn === this.socket?.id,
       );
-      this.failure ??= progress;
+      // R21: a catch-up page held a message that does not decode; the read
+      // must still have ended, and the listener gone live.
+      this.failure ??=
+        progress !== null && this.coverage.unreadableInCatchUp > 0
+          ? `${progress} (a catch-up page held a message that does not decode)`
+          : progress;
       this.failure ??= checkReactions(
         this.slack,
         this.session,
@@ -1176,6 +1562,9 @@ export class World {
       );
       if (unacked)
         this.failure ??= "R8: a live socket left an envelope unacknowledged";
+      if (this.badLines.size > 0 || this.badNullLines.length > 0)
+        this.failure ??=
+          "R22: a session line that does not decode got no JSON-RPC error";
       if (this.pending > 0 || !quiet)
         this.failure ??=
           "R7: external operations did not settle within one hour";
