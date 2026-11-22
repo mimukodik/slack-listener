@@ -68,6 +68,16 @@ export type Snapshot = {
   readonly tasks: readonly Task[];
   readonly events: readonly Event[];
   readonly requests: readonly string[];
+  // The request keys' rows as stored: the request as canonical JSON and the
+  // answer, for the abstraction to the TLA+ model (src/hub/sim/alpha.ts).
+  readonly memo: readonly MemoRow[];
+};
+
+export type MemoRow = {
+  readonly principal: string;
+  readonly requestKey: string;
+  readonly request: string;
+  readonly answer: string;
 };
 
 export class TaskStore extends Context.Service<
@@ -312,14 +322,21 @@ const makeStore = Effect.gen(function* () {
     const requests = yield* sql<{
       readonly principal: string;
       readonly request_key: string;
+      readonly request: string;
       readonly answer: string;
-    }>`SELECT principal, request_key, answer FROM hub_requests ORDER BY principal, request_key`;
+    }>`SELECT principal, request_key, request, answer FROM hub_requests ORDER BY principal, request_key`;
     return {
       tasks,
       events: all,
       requests: requests.map(
         (row) => `${row.principal} ${row.request_key} ${row.answer}`,
       ),
+      memo: requests.map((row) => ({
+        principal: row.principal,
+        requestKey: row.request_key,
+        request: row.request,
+        answer: row.answer,
+      })),
     };
   }).pipe(Effect.catchTag(["SqlError", "SchemaError"], Effect.die));
 
