@@ -30,7 +30,7 @@ flowchart LR
 
 ## 3. The rules in brief
 
-The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7, R8 and R18 at the end of every run, with R18's calls also checked as they are made; R6 and R11–R13 have unit tests, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
+The rule texts are in [`RULES.md`](../../RULES.md); this section only says when each one applies. The safety rules R2, R3, R4, R5, R10 and R17 and the backoff cap of R8 are checked by the simulator after every step, and R7, R8 and R18 at the end of every run, with R18's calls also checked as they are made; R6 and R11–R13 have unit tests, R19–R22 unit and shell tests with malformed input of each kind, and R15 has none yet. Rule ids appear in the test names. An id is never reused; a replaced or removed rule stays in place, marked.
 
 | Rule | Applies  | About                                                                                                              |
 | ---- | -------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -47,6 +47,10 @@ The rule texts are in [`RULES.md`](../../RULES.md); this section only says when 
 | R16  | replaced | replaced by R17: an own-side agent who started a thread showed as an outsider                                      |
 | R17  | step 1   | a thread reply can be answered on its own; the parent is quoted when any configured author wrote it                |
 | R18  | step 1   | a reaction says the message reached the session; it turns into a check mark when our side answers or marks it done |
+| R19  | step 1   | a state file that does not decode stops the tool before it connects                                                |
+| R20  | step 1   | a Socket Mode frame that does not decode is dropped, and acknowledged when it has an id                            |
+| R21  | step 1   | a Web API answer that does not decode is a failed call, tried again like one                                       |
+| R22  | step 1   | a session line that does not decode gets the JSON-RPC error, and the tool reads on                                 |
 | R11  | step 2   | a post says who wrote it                                                                                           |
 | R12  | step 2   | agent loops stop                                                                                                   |
 | R13  | step 2   | an acknowledgement is not answered                                                                                 |

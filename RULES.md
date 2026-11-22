@@ -98,6 +98,46 @@ both directions; a person typing is the exception.
   delays or drops a delivery; it is retried a bounded number of times and then given
   up. Reactions carry no text.
 
+## Malformed input, step 1
+
+What reaches the listener from outside is decoded once, where it enters, into the
+shape the listener uses. These rules say what happens when it does not decode. A
+log line or an error about it names the field and what was expected, never a value
+from the input (R6).
+
+- **R19. A state file that does not decode stops the listener.** On start the
+  listener reads its state file. A file that is not JSON, has a version other than
+  1, or lacks a field or holds one of the wrong type stops the listener before it
+  connects or writes anything. The file is left as it is, and the error names the
+  file and the field that does not decode. A field may be missing only where the file was written
+  before the field existed: R18's reaction fields then read as empty, and a queued
+  reaction call without a mark as the seen mark. A missing file starts fresh.
+  Starting fresh from a damaged file could deliver messages a second time (R2) or
+  lose those waiting to be delivered (R7), so the person decides: repair the file,
+  or move it aside to start fresh from that moment.
+- **R20. A Socket Mode frame that does not decode is dropped.** A frame that is not
+  a JSON object, or whose type or envelope id is not a string, is logged and
+  dropped, and the connection goes on. An envelope with an id whose payload does
+  not decode, such as a message event without a `ts`, is acknowledged, so that
+  Slack does not send it again, logged, and not delivered. An event that is not a
+  message is acknowledged and dropped. A disconnect frame reconnects
+  whatever its reason holds.
+- **R21. A Web API answer that does not decode is a failed call.** An answer that is
+  not JSON, does not say whether it is ok, or holds a field the listener reads with
+  the wrong type fails the call, exactly as an error from Slack does: connecting and
+  catching up are tried again on R8's waits, a reaction call on R18's three tries; a
+  sender name falls back to the user id, and a thread parent or link is left out.
+  A catch-up read that keeps failing this way keeps the listener from going live,
+  so new messages wait until Slack's answer decodes, as with any failing catch-up.
+- **R22. A line from the session that does not decode is answered with the JSON-RPC
+  error.** A line that is not JSON gets a parse error (-32700) with a null id. One
+  that is not a JSON-RPC 2.0 request (no method, a method or id of the wrong type, a
+  null id, params that are not an object, a batch) gets an invalid request (-32600),
+  with the line's id when it has a string or number one, else null. A `tools/call`
+  whose params do not decode gets invalid params (-32602). The listener reads on;
+  the session stays connected. A `done` call whose arguments hold no Slack `ts` is
+  answered as a tool error, not a JSON-RPC one, so the session reads why.
+
 ## Step 2: answering through the tool
 
 Posting goes on once step 1 has its live proof and the two-instance settling
@@ -131,6 +171,9 @@ posting stays off until `posting: true` is set in the configuration.
 - An edit that leaves the text unchanged but moves Slack's edit time, made while the
   instance was disconnected or stopped. Catch-up cannot tell it from a real edit and
   delivers it once as `kind=edit`. Received live, it is dropped (R5).
+- A message whose Socket Mode event does not decode (R20). It is acknowledged and not
+  delivered live; a catch-up that reads it from Slack's history in a shape that
+  decodes still delivers it.
 - Messages Slack pushes more than 3 seconds apart in reverse order of their `ts`. The
   tool holds each live message for 3 seconds and orders what it holds (R4); a wider
   reordering by Slack can reach the session out of order.

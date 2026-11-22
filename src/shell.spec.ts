@@ -22,7 +22,13 @@ import { defaultLimits, type TimerName } from "./core.ts";
 import { channelInstructions } from "./format.ts";
 import { makeLog } from "./log.ts";
 import { ChannelServer } from "./mcp.ts";
-import { backoffSchedule, readSaved, replaceTimer, runShell } from "./shell.ts";
+import {
+  backoffSchedule,
+  decodeFrame,
+  readSaved,
+  replaceTimer,
+  runShell,
+} from "./shell.ts";
 import { host, withTripwire } from "./sim/host.ts";
 import { SimRuntime } from "./sim/runtime.ts";
 import { simStartMs } from "./sim/simulator.ts";
@@ -62,12 +68,11 @@ function session(dieOnNotification = false) {
         }),
       ),
   });
-  const send = (message: object) =>
-    Effect.runSync(
-      Queue.offer(stdin, encoder.encode(`${JSON.stringify(message)}\n`)),
-    );
+  const sendLine = (line: string) =>
+    Effect.runSync(Queue.offer(stdin, encoder.encode(`${line}\n`)));
+  const send = (message: object) => sendLine(JSON.stringify(message));
   const close = () => Effect.runSync(Queue.end(stdin));
-  return { layer, lines, stderr, send, close };
+  return { layer, lines, stderr, send, sendLine, close };
 }
 
 async function until(condition: () => boolean, label: string) {
@@ -185,6 +190,110 @@ describe("channel server", () => {
       params: { content: "hi", meta: { ts: "1.2" } },
     });
   });
+
+  // R22: a line that does not decode gets the JSON-RPC error the spec
+  // names, and the server keeps reading.
+  const answers = async (lines: readonly string[], lastId: number) => {
+    const stdio = session();
+    const logged: string[] = [];
+    const program = Effect.gen(function* () {
+      yield* ChannelServer.make({
+        name: "slack",
+        version: "0.0.0",
+        instructions: channelInstructions,
+        log: (line) => Effect.sync(() => void logged.push(line)),
+      });
+      for (const line of lines) stdio.sendLine(line);
+      stdio.send({ jsonrpc: "2.0", id: lastId, method: "ping" });
+      yield* Effect.promise(async () =>
+        until(
+          () => stdio.lines.some((line) => line.id === lastId),
+          "the ping after the malformed lines",
+        ),
+      );
+    });
+    await Effect.runPromise(
+      program.pipe(Effect.scoped, Effect.provide(stdio.layer)),
+    );
+    expect(stdio.lines.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      id: lastId,
+      result: {},
+    });
+    expect(JSON.stringify(stdio.lines)).not.toContain("quoted words");
+    expect(logged.join("\n")).not.toContain("quoted words");
+    return stdio.lines
+      .slice(0, -1)
+      .map((line) => [
+        line.id,
+        (line.error as { code?: number } | undefined)?.code ?? "result",
+      ]);
+  };
+
+  it("R22: answers a line that is not JSON with a parse error, and goes on", async () => {
+    expect(await answers(["not json {", '{"quoted words'], 30)).toEqual([
+      [null, -32700],
+      [null, -32700],
+    ]);
+  });
+
+  it("R22: answers a line that is not a request with an invalid request, and goes on", async () => {
+    expect(
+      await answers(
+        [
+          "null",
+          "5",
+          '"quoted words"',
+          "[]",
+          '[{"jsonrpc":"2.0","id":31,"method":"ping"}]',
+          '{"jsonrpc":"2.0","id":32}',
+          '{"jsonrpc":"2.0","id":33,"method":5}',
+          '{"id":34,"method":"ping"}',
+          '{"jsonrpc":"1.0","id":35,"method":"ping"}',
+          '{"jsonrpc":"2.0","id":{"a":"quoted words"},"method":"ping"}',
+          '{"jsonrpc":"2.0","id":null,"method":"ping"}',
+          '{"jsonrpc":"2.0","id":36,"method":"ping","params":"quoted words"}',
+          '{"jsonrpc":"2.0","method":5}',
+        ],
+        37,
+      ),
+    ).toEqual([
+      [null, -32600],
+      [null, -32600],
+      [null, -32600],
+      [null, -32600],
+      [null, -32600],
+      [32, -32600],
+      [33, -32600],
+      [34, -32600],
+      [35, -32600],
+      [null, -32600],
+      [null, -32600],
+      [36, -32600],
+      [null, -32600],
+    ]);
+  });
+
+  it("R22: answers a tool call whose params do not decode with invalid params", async () => {
+    const call = (id: number, params: unknown) =>
+      JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params });
+    expect(
+      await answers(
+        [
+          call(40, undefined),
+          call(41, { name: 5 }),
+          call(42, { name: "done", arguments: "quoted words" }),
+          call(43, { name: "done", arguments: ["1795099386.438339"] }),
+        ],
+        44,
+      ),
+    ).toEqual([
+      [40, -32602],
+      [41, -32602],
+      [42, -32602],
+      [43, -32602],
+    ]);
+  });
 });
 
 describe("configuration", () => {
@@ -278,6 +387,150 @@ describe("the state file", () => {
   });
 });
 
+// R19: the state file is decoded once, where it is read. A file this listener
+// could not have written stops it before it connects, naming the field and
+// never the file's text; a file written before a field existed still reads.
+describe("R19: the state file as read", () => {
+  const delivery = {
+    key: "m:1795099386.438339",
+    kind: "message",
+    channel: "C0WATCH001",
+    ts: "1795099386.438339",
+    threadTs: "1795099386.438339",
+    isReply: false,
+    user: "U0OTHER01",
+    text: "quoted words",
+    postedAtMs: 1_795_099_386_438,
+    editedAtMs: null,
+    possibleDuplicate: false,
+  };
+  const written = {
+    version: 1,
+    caughtUpUntilMs: 1_795_099_000_000,
+    floorMs: 1_795_098_000_000,
+    claimed: { "m:1795099386.438339": 1_795_099_386_438 },
+    queue: [delivery],
+    inflight: { ...delivery, key: "m:1795099380.000100" },
+    held: [
+      {
+        message: {
+          type: "message",
+          user: "U0OTHER01",
+          text: "quoted words",
+          ts: "1795099390.000100",
+          edited: { user: "U0OTHER01", ts: "1795099391.000100" },
+        },
+        arrivedAtMs: 1_795_099_390_100,
+      },
+    ],
+    reactions: [{ action: "add", mark: "handled", ts: "1795099386.438339" }],
+    reacted: { "1795099386.438339": "1795099386.438339" },
+    handled: { "1795099386.438339": 1_795_099_400_000 },
+    answered: { "1795099386.438339": "1795099395.000100" },
+    marked: { "1795099386.438339": 1_795_099_400_000 },
+  };
+  const read = async (text: string) =>
+    Effect.runPromise(
+      Effect.result(
+        readSaved("/state/test.json").pipe(
+          Effect.provide(
+            FileSystem.layerNoop({
+              readFileString: () => Effect.succeed(text),
+            }),
+          ),
+        ),
+      ),
+    );
+  const refused = async (text: string) => {
+    const result = await read(text);
+    if (result._tag === "Success")
+      throw new Error(`read a file it should refuse: ${text.slice(0, 80)}`);
+    expect(result.failure._tag).toBe("StateFileError");
+    expect(result.failure.reason).toContain("/state/test.json");
+    expect(result.failure.reason).not.toContain("quoted words");
+    return result.failure.reason;
+  };
+  const without = (key: string) =>
+    Object.fromEntries(Object.entries(written).filter(([k]) => k !== key));
+
+  it("reads a file as this listener writes it", async () => {
+    const result = await read(JSON.stringify(written));
+    expect(result._tag === "Success" ? result.success : result).toEqual(
+      written as never,
+    );
+  });
+
+  it("reads a file written before R18 with R18's fields empty", async () => {
+    const before = {
+      version: 1,
+      caughtUpUntilMs: written.caughtUpUntilMs,
+      floorMs: written.floorMs,
+      claimed: written.claimed,
+      queue: written.queue,
+      inflight: null,
+      held: written.held,
+    };
+    const result = await read(JSON.stringify(before));
+    expect(result._tag === "Success" ? result.success : result).toEqual({
+      ...before,
+      reactions: [],
+      reacted: {},
+      handled: {},
+      answered: {},
+      marked: {},
+    } as never);
+  });
+
+  it("refuses a file that is not JSON", async () => {
+    expect(await refused('{"version":1, "quoted words')).toContain("not JSON");
+  });
+
+  it("refuses a file that is not an object, or has another version", async () => {
+    for (const text of ["null", "[]", '"quoted words"', "5"])
+      await refused(text);
+    expect(await refused(JSON.stringify({ ...written, version: 2 }))).toContain(
+      "version",
+    );
+  });
+
+  // Today's reading turned a missing timestamp into NaN and filled a
+  // missing or wrong field with whatever came; each is refused now.
+  it("refuses a field that is missing or of the wrong type, naming the field", async () => {
+    const cases: [string, object][] = [
+      ["caughtUpUntilMs", without("caughtUpUntilMs")],
+      ["floorMs", { ...written, floorMs: String(written.floorMs) }],
+      ["claimed", without("claimed")],
+      ["claimed", { ...written, claimed: { "m:1": "quoted words" } }],
+      ["queue", without("queue")],
+      ["queue", { ...written, queue: "quoted words" }],
+      ["queue", { ...written, queue: null }],
+      ["ts", { ...written, queue: [{ ...delivery, ts: 1795099386 }] }],
+      ["kind", { ...written, queue: [{ ...delivery, kind: "quoted words" }] }],
+      ["inflight", without("inflight")],
+      ["text", { ...written, inflight: { ...delivery, text: undefined } }],
+      ["held", without("held")],
+      [
+        "ts",
+        {
+          ...written,
+          held: [{ message: { text: "quoted words" }, arrivedAtMs: 1 }],
+        },
+      ],
+      [
+        "mark",
+        {
+          ...written,
+          reactions: [{ action: "add", mark: "quoted words", ts: "1.2" }],
+        },
+      ],
+      ["reacted", { ...written, reacted: { "1.2": 5 } }],
+      ["marked", { ...written, marked: null }],
+    ];
+    for (const [field, file] of cases)
+      expect(await refused(JSON.stringify(file))).toContain(field);
+  });
+});
+
 describe("R6: tokens stay secret", () => {
   it("redacts bot, user and app tokens from any log line", () => {
     const line = `failed with xoxb-${"1".repeat(10)}-abc and xapp-1-${"A".repeat(8)} and xoxp-${"2".repeat(6)}`;
@@ -340,7 +593,11 @@ class FakeSocket implements Socket.WebSocketLike {
   }
 
   frame(frame: object): void {
-    this.emit("message", { data: JSON.stringify(frame) });
+    this.raw(JSON.stringify(frame));
+  }
+
+  raw(data: string): void {
+    this.emit("message", { data });
   }
 
   close(code = 1000): void {
@@ -603,6 +860,128 @@ describe("the shell as an Effect program", () => {
     );
   });
 
+  // R20: a frame that does not decode is logged without its contents and
+  // dropped; one with an envelope id is acknowledged first, so Slack does
+  // not send it again. The connection goes on either way.
+  const malformedFrames = async (
+    send: (socket: FakeSocket, nowTs: () => string) => void,
+  ) => {
+    const sockets: FakeSocket[] = [];
+    const shell = startShell(() => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      setTimeout(() => socket.open(), 1);
+      return socket;
+    });
+    await until(() => sockets[0]?.readyState === 1, "the socket");
+    const socket = sockets[0] as FakeSocket;
+    socket.frame({ type: "hello" });
+    await until(
+      () => shell.calls.includes("conversations.history"),
+      "catch-up",
+    );
+    let offsetMs = 0;
+    send(socket, () => msToTs(Date.now() + (offsetMs += 1)));
+    const ts = msToTs(Date.now() + 100);
+    socket.frame(
+      envelope("EVALID", {
+        type: "message",
+        channel: "C0WATCH001",
+        user: "U0OTHER01",
+        text: "after the malformed frames",
+        ts,
+      }),
+    );
+    await until(() => shell.notifications().length === 1, "the delivery");
+    // Past the 20 ms hold, so a held malformed message would have reached
+    // the core by now.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    shell.stdio.close();
+    const exit = await shell.done;
+    expect(exit._tag).toBe("Success");
+    expect(shell.notifications()).toHaveLength(1);
+    expect(JSON.stringify(shell.notifications()[0])).toContain(ts);
+    const stderr = shell.stdio.stderr.join("");
+    expect(stderr).not.toContain("quoted words");
+    expect(sockets).toHaveLength(1);
+    return { acks: socket.sent, stderr };
+  };
+
+  it("R20: drops a frame that does not decode, and the connection goes on", async () => {
+    const { acks, stderr } = await malformedFrames((socket) => {
+      socket.raw("not json, quoted words");
+      socket.raw("null");
+      socket.raw('"quoted words"');
+      socket.raw("[1]");
+      socket.frame({ type: 5 });
+      socket.frame({
+        type: "events_api",
+        envelope_id: 7,
+        payload: { event: { text: "quoted words" } },
+      });
+    });
+    expect(acks).toEqual([JSON.stringify({ envelope_id: "EVALID" })]);
+    expect(stderr.split("does not decode").length - 1).toBe(5);
+    expect(stderr).toContain("slack sent a frame that is not JSON");
+  });
+
+  it("R20: acknowledges an envelope whose event does not decode, and delivers nothing of it", async () => {
+    const { acks, stderr } = await malformedFrames((socket, nowTs) => {
+      const message = {
+        type: "message",
+        channel: "C0WATCH001",
+        user: "U0OTHER01",
+        text: "quoted words",
+      };
+      socket.frame(envelope("ENOTS", message));
+      socket.frame(envelope("ETSTYPE", { ...message, ts: 1795099386 }));
+      socket.frame(envelope("ETEXT", { ...message, text: 5, ts: nowTs() }));
+      socket.frame(
+        envelope("EEDIT", {
+          type: "message",
+          subtype: "message_changed",
+          channel: "C0WATCH001",
+          ts: nowTs(),
+          message: { ...message, ts: nowTs(), edited: { user: "U0OTHER01" } },
+        }),
+      );
+      socket.frame({
+        type: "events_api",
+        envelope_id: "EPAYLOAD",
+        payload: "quoted words",
+      });
+      // Not a message: acknowledged and dropped, as before.
+      socket.frame(
+        envelope("EREACTION", { type: "reaction_added", reaction: "eyes" }),
+      );
+    });
+    expect(acks).toEqual(
+      [
+        "ENOTS",
+        "ETSTYPE",
+        "ETEXT",
+        "EEDIT",
+        "EPAYLOAD",
+        "EREACTION",
+        "EVALID",
+      ].map((id) => JSON.stringify({ envelope_id: id })),
+    );
+    for (const id of ["ENOTS", "ETSTYPE", "ETEXT", "EEDIT", "EPAYLOAD"])
+      expect(stderr).toContain(`envelope ${id} that does not decode`);
+    expect(stderr).not.toContain("EREACTION that does not decode");
+  });
+
+  // Slack closes the socket after a disconnect frame whatever its reason
+  // says, so the listener reconnects as it did before decoding.
+  it("R20: a disconnect frame reconnects whatever its reason holds", () => {
+    expect(
+      decodeFrame('{"type":"disconnect","reason":"refresh_requested"}'),
+    ).toEqual({ kind: "disconnect", reason: "refresh_requested" });
+    expect(
+      decodeFrame('{"type":"disconnect","reason":["quoted words"]}'),
+    ).toEqual({ kind: "disconnect", reason: "no reason" });
+  });
+
   it("stops loudly when a fiber of the shell dies", async () => {
     const shell = startShell(() => {
       throw new Error("bad socket url");
@@ -662,12 +1041,114 @@ describe("the shell as an Effect program", () => {
   });
 });
 
+// R21: a Web API answer is decoded where it arrives; one that does not
+// decode is a failed call, never a defect and never a success.
+describe("R21: a Web API answer that does not decode", () => {
+  const callWith = async <A>(
+    body: string,
+    call: (api: SlackApi) => Effect.Effect<A, { reason: string }>,
+  ) => {
+    const fetch = (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof globalThis.fetch;
+    return Effect.runPromise(
+      Effect.result(
+        SlackApi.make("xoxb-test", "xapp-test").pipe(
+          Effect.flatMap(call),
+          Effect.provide(FetchHttpClient.layer),
+          Effect.provideService(FetchHttpClient.Fetch, fetch),
+        ),
+      ),
+    );
+  };
+  const history = (api: SlackApi) => api.history("C0WATCH001", "1.000000");
+
+  it("fails the call, naming the method and the field but no value", async () => {
+    const cases: [
+      string,
+      (api: SlackApi) => Effect.Effect<unknown, { reason: string }>,
+      string,
+    ][] = [
+      ["not json, quoted words", history, "conversations.history"],
+      ["null", history, "conversations.history"],
+      ['"quoted words"', history, "conversations.history"],
+      ["{}", history, "ok"],
+      ['{"ok":"quoted words"}', history, "ok"],
+      ['{"ok":false,"error":5}', history, "error"],
+      ['{"ok":true,"messages":"quoted words"}', history, "messages"],
+      ['{"ok":true,"messages":[{"text":"quoted words"}]}', history, "ts"],
+      [
+        '{"ok":true,"messages":[],"response_metadata":{"next_cursor":5}}',
+        history,
+        "next_cursor",
+      ],
+      ['{"ok":true,"url":5}', (api) => api.openConnection(), "url"],
+      ['{"ok":true,"url":["quoted words"]}', (api) => api.teamUrl(), "url"],
+      [
+        '{"ok":true,"user":{"name":"quoted words","real_name":5}}',
+        (api) => api.userName("U0OTHER01"),
+        "real_name",
+      ],
+      [
+        '{"ok":true,"messages":[{"ts":5,"text":"quoted words"}]}',
+        (api) => api.parentMessage("C0WATCH001", "1.2"),
+        "ts",
+      ],
+      [
+        "null",
+        (api) => api.addReaction("C0WATCH001", "1.2", "eyes"),
+        "reactions.add",
+      ],
+      ["[]", (api) => api.canRead("C0WATCH001"), "conversations.history"],
+    ];
+    for (const [body, call, field] of cases) {
+      const result = await callWith(body, call);
+      if (result._tag === "Success")
+        throw new Error(`a call succeeded on ${body}`);
+      expect(result.failure.reason).toContain(field);
+      expect(result.failure.reason).not.toContain("quoted words");
+    }
+  });
+
+  it("still reads an answer that decodes, ignoring fields it does not use", async () => {
+    const result = await callWith(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            type: "message",
+            user: "U0OTHER01",
+            text: "hello",
+            ts: "1795099386.438339",
+            blocks: [{ type: "rich_text" }],
+            reply_count: 2,
+          },
+        ],
+        has_more: false,
+        response_metadata: { next_cursor: "" },
+      }),
+      history,
+    );
+    expect(result._tag === "Success" ? result.success : result).toEqual([
+      {
+        type: "message",
+        user: "U0OTHER01",
+        text: "hello",
+        ts: "1795099386.438339",
+        reply_count: 2,
+      },
+    ] as never);
+  });
+});
+
 // The whole shell on the simulator's virtual clock, with a scripted Slack
 // whose answers come at once, so the time between two calls is exactly the
 // wait the shell chose (PRINCIPLES.md: effect-does-the-waiting).
 function virtualShell(
   seed: number,
-  slack: (method: string, params: URLSearchParams) => object,
+  slack: (method: string, params: URLSearchParams) => unknown,
   onSocket: (socket: FakeSocket, runtime: SimRuntime) => void,
   options: { initializedAtMs: number } = { initializedAtMs: 0 },
 ) {
@@ -847,6 +1328,53 @@ describe("retries on a virtual clock", () => {
     expect(gaps(shell.calls, "conversations.history")).toEqual([2000, 4000]);
   });
 
+  // R21: a catch-up read whose answer does not decode is a failed read, so
+  // it waits on the connection's run like any other failed read.
+  it("R21: a catch-up read that does not decode is tried again after 1 and 2 s", async () => {
+    let reads = 0;
+    const shell = virtualShell(
+      1,
+      (method) => {
+        if (method === "conversations.history") reads += 1;
+        if (method === "conversations.history" && reads === 1)
+          return { ok: true, messages: [{ text: "quoted words" }] };
+        if (method === "conversations.history" && reads === 2) return null;
+        return slackBodies[method] ?? { ok: false };
+      },
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+      },
+    );
+    await shell.run(60_000);
+    expect(gaps(shell.calls, "conversations.history")).toEqual([1000, 2000]);
+    const stderr = shell.stdio.stderr.join("");
+    expect(stderr.split("catch-up failed: conversations.history").length).toBe(
+      3,
+    );
+    expect(stderr).not.toContain("quoted words");
+  });
+
+  // R21: an open whose answer does not decode is a failed open (R8).
+  it("R21: an open that does not decode is tried again after 1 and 2 s", async () => {
+    let opens = 0;
+    const shell = virtualShell(
+      1,
+      (method) => {
+        if (method === "apps.connections.open") opens += 1;
+        if (method === "apps.connections.open" && opens <= 2)
+          return { ok: true, url: opens === 1 ? 5 : null };
+        return slackBodies[method] ?? { ok: false };
+      },
+      (socket, runtime) => {
+        runtime.at(1, () => socket.open());
+        runtime.at(2, () => socket.frame({ type: "hello" }));
+      },
+    );
+    await shell.run(60_000);
+    expect(gaps(shell.calls, "apps.connections.open")).toEqual([1000, 2000]);
+  });
+
   // A delivery written while the session has not initialized fails and is
   // tried again on its own run of waits; its seen mark follows at once.
   it("a failed delivery is tried again after 1, 2 and 4 s", async () => {
@@ -883,7 +1411,7 @@ describe("retries on a virtual clock", () => {
   // R18: three tries at 0, 1 and 3 s, then given up; the next call goes on.
   describe("R18: a reaction call", () => {
     const deliverTwo = (
-      first: (tried: number) => object,
+      first: (tried: number) => unknown,
     ): ReturnType<typeof virtualShell> => {
       const tries = new Map<string, number>();
       const shell = virtualShell(
@@ -942,6 +1470,23 @@ describe("retries on a virtual clock", () => {
       expect(shell.stdio.stderr.join("")).toContain(
         `reaction add seen on ${firstTs} given up: ratelimited`,
       );
+    });
+
+    // R21: an answer that does not decode is a failed call.
+    it("whose answer does not decode is tried at 0, 1 and 3 s and given up", async () => {
+      const shell = deliverTwo((tried) =>
+        tried === 1 ? null : tried === 2 ? "quoted words" : { ok: "yes" },
+      );
+      await shell.run(60_000);
+      expect(reactions(shell.calls)).toEqual([
+        "4000 first",
+        "5000 first",
+        "7000 first",
+        "7000 second",
+      ]);
+      const stderr = shell.stdio.stderr.join("");
+      expect(stderr).toContain(`reaction add seen on ${firstTs} given up:`);
+      expect(stderr).not.toContain("quoted words");
     });
 
     it("that fails once is tried again after 1 s", async () => {

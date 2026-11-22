@@ -1,8 +1,9 @@
-import { Data, Effect } from "effect";
+import { Data, Effect, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientError } from "effect/http";
 
-import type { SlackMessage } from "./slack.ts";
+import { describeIssue } from "./decode.ts";
+import { SlackMessageSchema, type SlackMessage } from "./slack.ts";
 
 export class SlackApiError extends Data.TaggedError("SlackApiError")<{
   method: string;
@@ -13,11 +14,33 @@ export function redact(text: string): string {
   return text.replace(/x(?:ox[a-z]|app)-[A-Za-z0-9-]+/g, "[token]");
 }
 
-interface SlackResponse {
-  ok: boolean;
-  error?: string;
-  response_metadata?: { next_cursor?: string };
-}
+// Every answer says whether it is ok, and why not (R21).
+const Answer = Schema.Struct({
+  ok: Schema.Boolean,
+  error: Schema.optionalKey(Schema.String),
+});
+const decodeAnswer = Schema.decodeUnknownResult(Answer);
+
+// The fields each call reads from an ok answer; the rest are dropped.
+const Messages = Schema.Struct({
+  messages: Schema.optionalKey(Schema.Array(SlackMessageSchema)),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) }),
+  ),
+});
+const Url = Schema.Struct({ url: Schema.optionalKey(Schema.String) });
+const UserInfo = Schema.Struct({
+  user: Schema.optionalKey(
+    Schema.Struct({
+      name: Schema.optionalKey(Schema.String),
+      real_name: Schema.optionalKey(Schema.String),
+      profile: Schema.optionalKey(
+        Schema.Struct({ display_name: Schema.optionalKey(Schema.String) }),
+      ),
+    }),
+  ),
+});
+const Empty = Schema.Struct({});
 
 // The Slack Web API over Effect's HttpClient: production provides a client on
 // the real fetch, the simulator one on its fake (world-through-services).
@@ -42,11 +65,16 @@ export class SlackApi {
     });
   }
 
-  call<T extends SlackResponse>(
+  // R21: the answer is decoded where it arrives. One that does not decode is
+  // a failed call, as a failed request is, and its reason names the field,
+  // never a value.
+  call<S extends Schema.ConstraintDecoder<unknown>>(
     method: string,
     params: Record<string, string>,
+    answer: S,
     token: "bot" | "app" = "bot",
-  ): Effect.Effect<T, SlackApiError> {
+  ): Effect.Effect<S["Type"], SlackApiError> {
+    const decodeBody = Schema.decodeUnknownResult(answer);
     const request = HttpClientRequest.post(
       `https://slack.com/api/${method}`,
     ).pipe(
@@ -84,11 +112,29 @@ export class SlackApi {
           : new SlackApiError({ method, reason: redact(error.message) }),
       ),
       Effect.flatMap((json) => {
-        const body = json as T;
-        return body.ok
-          ? Effect.succeed(body)
+        const head = decodeAnswer(json);
+        if (head._tag === "Failure")
+          return Effect.fail(
+            new SlackApiError({
+              method,
+              reason: `${method} answer ${describeIssue(head.failure)}`,
+            }),
+          );
+        if (!head.success.ok)
+          return Effect.fail(
+            new SlackApiError({
+              method,
+              reason: head.success.error ?? "not ok",
+            }),
+          );
+        const body = decodeBody(json);
+        return body._tag === "Success"
+          ? Effect.succeed(body.success)
           : Effect.fail(
-              new SlackApiError({ method, reason: body.error ?? "not ok" }),
+              new SlackApiError({
+                method,
+                reason: `${method} answer ${describeIssue(body.failure)}`,
+              }),
             );
       }),
     );
@@ -108,11 +154,15 @@ export class SlackApi {
           new SlackApiError({ method, reason: "more than 100 pages" }),
         );
       }
-      return this.call<SlackResponse & { messages?: SlackMessage[] }>(method, {
-        ...params,
-        limit: "200",
-        ...(cursor === "" ? {} : { cursor }),
-      }).pipe(
+      return this.call(
+        method,
+        {
+          ...params,
+          limit: "200",
+          ...(cursor === "" ? {} : { cursor }),
+        },
+        Messages,
+      ).pipe(
         Effect.flatMap((body) => {
           const all = [...collected, ...(body.messages ?? [])];
           const next = body.response_metadata?.next_cursor ?? "";
@@ -148,11 +198,7 @@ export class SlackApi {
   }
 
   openConnection(): Effect.Effect<string, SlackApiError> {
-    return this.call<SlackResponse & { url?: string }>(
-      "apps.connections.open",
-      {},
-      "app",
-    ).pipe(
+    return this.call("apps.connections.open", {}, Url, "app").pipe(
       Effect.flatMap((body) =>
         body.url !== undefined && body.url !== ""
           ? Effect.succeed(body.url)
@@ -167,22 +213,13 @@ export class SlackApi {
   }
 
   teamUrl(): Effect.Effect<string, SlackApiError> {
-    return this.call<SlackResponse & { url?: string; user_id?: string }>(
-      "auth.test",
-      {},
-    ).pipe(Effect.map((body) => body.url ?? ""));
+    return this.call("auth.test", {}, Url).pipe(
+      Effect.map((body) => body.url ?? ""),
+    );
   }
 
   userName(user: string): Effect.Effect<string, SlackApiError> {
-    return this.call<
-      SlackResponse & {
-        user?: {
-          name?: string;
-          real_name?: string;
-          profile?: { display_name?: string };
-        };
-      }
-    >("users.info", { user }).pipe(
+    return this.call("users.info", { user }, UserInfo).pipe(
       Effect.map((body) => {
         const profileName = body.user?.profile?.display_name;
         if (profileName !== undefined && profileName !== "") return profileName;
@@ -195,7 +232,7 @@ export class SlackApi {
     channel: string,
     threadTs: string,
   ): Effect.Effect<SlackMessage | null, SlackApiError> {
-    return this.call<SlackResponse & { messages?: SlackMessage[] }>(
+    return this.call(
       "conversations.replies",
       {
         channel,
@@ -203,6 +240,7 @@ export class SlackApi {
         limit: "1",
         inclusive: "true",
       },
+      Messages,
     ).pipe(
       Effect.map((body) => {
         const first = body.messages?.[0];
@@ -216,11 +254,11 @@ export class SlackApi {
     ts: string,
     name: string,
   ): Effect.Effect<void, SlackApiError> {
-    return this.call<SlackResponse>("reactions.add", {
-      channel,
-      timestamp: ts,
-      name,
-    }).pipe(Effect.asVoid);
+    return this.call(
+      "reactions.add",
+      { channel, timestamp: ts, name },
+      Empty,
+    ).pipe(Effect.asVoid);
   }
 
   removeReaction(
@@ -228,17 +266,18 @@ export class SlackApi {
     ts: string,
     name: string,
   ): Effect.Effect<void, SlackApiError> {
-    return this.call<SlackResponse>("reactions.remove", {
-      channel,
-      timestamp: ts,
-      name,
-    }).pipe(Effect.asVoid);
+    return this.call(
+      "reactions.remove",
+      { channel, timestamp: ts, name },
+      Empty,
+    ).pipe(Effect.asVoid);
   }
 
   canRead(channel: string): Effect.Effect<void, SlackApiError> {
-    return this.call<SlackResponse>("conversations.history", {
-      channel,
-      limit: "1",
-    }).pipe(Effect.asVoid);
+    return this.call(
+      "conversations.history",
+      { channel, limit: "1" },
+      Empty,
+    ).pipe(Effect.asVoid);
   }
 }
