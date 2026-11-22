@@ -20,7 +20,8 @@
     "test": "bun test",
     "sim": "bun src/sim/run.ts",
     "exhaustive": "bun src/sim/exhaustive.ts",
-    "sim:hub": "bun src/hub/sim/run.ts"
+    "sim:hub": "bun src/hub/sim/run.ts",
+    "sim:hub:replay": "bun src/hub/sim/replay.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.1.4",

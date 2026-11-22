@@ -92,7 +92,7 @@ const startMs = 1_794_900_000_000;
 const answerMsMax = 20;
 // Where a crash lands: before a statement inside a write transaction,
 // before one outside, or at a seeded time.
-type CrashPoint = "transaction" | "statement" | "timer";
+type CrashPoint = "transaction" | "statement" | "timer" | "reply";
 
 // A statement runs on the client's own connection and needs no service.
 function isStatement(
@@ -108,6 +108,43 @@ class CheckerStore extends Context.Service<
 >()("hub/sim/CheckerStore") {}
 
 type Step = { readonly call: Call };
+
+// What a mode plans next: a wait, a call with its fate, or nothing more.
+export type Planned =
+  | { readonly waitMs: number }
+  | { readonly call: Call; readonly fate: "answer" | "lose" | "crash" };
+
+// A fixed or bounded way of driving the hub instead of the seeded random
+// one (src/hub/sim/conform.ts): the replay of the TLA+ model's paths, and
+// runs inside the model's bounds that record a trace for it.
+export interface Mode {
+  // Whether the call in flight is sent again after a crash.
+  readonly retries: boolean;
+  // Seeded crashes before a statement, per thousand, besides planned ones.
+  readonly crashPerMille: number;
+  started(snapshot: Snapshot, nowMs: number): void;
+  next(
+    model: Model,
+    nowMs: number,
+    surface: () => Call["surface"],
+    int: (n: number) => number,
+  ): Planned | undefined;
+  // Each returns a failure, or undefined; each sees every step, even one the
+  // checker already failed.
+  answered(
+    call: Call,
+    actual: Observation,
+    snapshot: Snapshot,
+    nowMs: number,
+  ): string | undefined;
+  waited(waitMs: number, snapshot: Snapshot, nowMs: number): string | undefined;
+  restarted(
+    call: Call | undefined,
+    committed: boolean,
+    snapshot: Snapshot,
+    nowMs: number,
+  ): string | undefined;
+}
 type InFlight = {
   readonly step: Step;
   readonly before: Model;
@@ -202,9 +239,63 @@ class Driver {
   private readonly runtime: SimRuntime;
   private readonly steps: number;
 
-  constructor(runtime: SimRuntime, steps: number) {
+  private readonly mode: Mode | undefined;
+  private fate: "answer" | "lose" | "crash" = "answer";
+
+  constructor(runtime: SimRuntime, steps: number, mode?: Mode) {
     this.runtime = runtime;
     this.steps = steps;
+    this.mode = mode;
+  }
+
+  // Whether to crash before this statement: a mode's planned crash comes
+  // at the first statement inside the call's transaction.
+  crashHere(inTransaction: boolean): boolean {
+    if (this.mode === undefined) return this.int(1000) < 5;
+    if (this.fate === "crash" && inTransaction) {
+      this.fate = "answer";
+      return true;
+    }
+    // Seeded ones only while a call is in flight: the trace starts from a
+    // store that opened.
+    return (
+      this.inFlight !== undefined &&
+      this.mode.crashPerMille > 0 &&
+      this.int(1000) < this.mode.crashPerMille
+    );
+  }
+
+  // Whether the answer that just came is lost: the process dies first.
+  loseReply(): boolean {
+    if (this.fate !== "lose") return false;
+    this.fate = "answer";
+    return true;
+  }
+
+  // A mode's first look at the store.
+  started(snapshot: Snapshot): void {
+    this.mode?.started(snapshot, this.runtime.nowMs);
+  }
+
+  // A mode's look after a wait.
+  waited(waitMs: number, snapshot: Snapshot): void {
+    const failure = this.mode?.waited(waitMs, snapshot, this.runtime.nowMs);
+    if (this.failure === null && failure !== undefined) this.failure = failure;
+  }
+
+  private nextOf(mode: Mode): { readonly waitMs: number } | Step | undefined {
+    if (this.failure !== null) return undefined;
+    if (this.inFlight !== undefined && mode.retries)
+      return this.send(this.inFlight.step, true);
+    const planned = mode.next(
+      this.model,
+      this.runtime.nowMs,
+      () => this.pick(surfaces),
+      (n) => this.int(n),
+    );
+    if (planned === undefined || "waitMs" in planned) return planned;
+    this.fate = planned.fate;
+    return this.send({ call: planned.call }, false);
   }
 
   private int(n: number): number {
@@ -223,6 +314,7 @@ class Driver {
 
   // The next thing the process does: wait, call, or stop.
   next(): { readonly waitMs: number } | Step | undefined {
+    if (this.mode !== undefined) return this.nextOf(this.mode);
     if (this.failure !== null || this.done >= this.steps) return undefined;
     if (this.inFlight !== undefined) return this.send(this.inFlight.step, true);
     if (this.chance(15)) return { waitMs: this.pick([50, 400, 1500, 4000]) };
@@ -263,6 +355,22 @@ class Driver {
     this.inFlight = undefined;
     this.done += 1;
     this.coverage.calls += 1;
+    const { call } = flight.step;
+    const seen = this.mode?.answered(
+      call,
+      actual,
+      snapshot,
+      this.runtime.nowMs,
+    );
+    this.judge(flight, actual, snapshot);
+    if (this.failure === null && seen !== undefined) this.failure = seen;
+  }
+
+  private judge(
+    flight: InFlight,
+    actual: Observation,
+    snapshot: Snapshot,
+  ): void {
     const { call } = flight.step;
     // The store's own events first: a change the rules forbid names its rule.
     const fault = ruleFault(snapshot);
@@ -346,6 +454,13 @@ class Driver {
     if (flight === undefined) {
       if (!this.model.snapshotEquals(snapshot))
         this.failure = "T7: the store after a crash differs from the model";
+      const seen = this.mode?.restarted(
+        undefined,
+        false,
+        snapshot,
+        this.runtime.nowMs,
+      );
+      if (this.failure === null && seen !== undefined) this.failure = seen;
       return;
     }
     const committed = flight.after.snapshotEquals(snapshot);
@@ -358,10 +473,27 @@ class Driver {
       // The first attempt committed: the retry must get its answer back.
       this.inFlight = { ...flight, before: flight.after };
     }
+    const mode = this.mode;
+    if (mode === undefined) return;
+    const seen = mode.restarted(
+      flight.step.call,
+      committed,
+      snapshot,
+      this.runtime.nowMs,
+    );
+    if (seen !== undefined) this.failure = seen;
+    if (!mode.retries) {
+      // No retry: the model moves on as of the store.
+      this.model = committed ? flight.after : flight.before;
+      this.inFlight = undefined;
+    }
   }
 
   get crashable(): boolean {
-    return this.failure === null && this.coverage.crashes < crashesMax;
+    return (
+      this.failure === null &&
+      (this.mode !== undefined || this.coverage.crashes < crashesMax)
+    );
   }
 
   private plan(): Call {
@@ -572,9 +704,13 @@ class Disk {
 export async function runHubSimulation(options: {
   readonly seed: number;
   readonly steps: number;
+  // A fixed or bounded mode: answers come at once, no timer crashes, and
+  // the mode's crashes and lost answers instead of seeded ones.
+  readonly mode?: Mode;
 }): Promise<HubResult> {
   const runtime = new SimRuntime(options.seed, [], startMs, false);
-  const driver = new Driver(runtime, options.steps);
+  const driver = new Driver(runtime, options.steps, options.mode);
+  const moded = options.mode !== undefined;
   const disk = new Disk();
   // Connections live in the world's scope: a crashed process abandons its
   // own, and they close only when the run ends.
@@ -589,7 +725,7 @@ export async function runHubSimulation(options: {
   };
 
   const crashTimer = () => {
-    if (!driver.crashable) return;
+    if (moded || !driver.crashable) return;
     runtime.at(
       runtime.choices.int(options.steps * 150) + 1,
       () => {
@@ -612,16 +748,16 @@ export async function runHubSimulation(options: {
       // the dead process. Until the timer fires nothing else writes: the
       // fiber holds the connection.
       const point = Effect.withFiber((fiber) => {
-        if (
-          !driver.crashable ||
-          state.crashing ||
-          runtime.choices.int(1000) >= 5
-        )
-          return Effect.void;
         const open = Context.getOrUndefined(
           fiber.context,
           sql.transactionService,
         );
+        if (
+          !driver.crashable ||
+          state.crashing ||
+          !driver.crashHere(open !== undefined)
+        )
+          return Effect.void;
         state.crashing = true;
         runtime.at(
           0,
@@ -678,18 +814,36 @@ export async function runHubSimulation(options: {
           );
           const world = yield* makeWorld(actions, {
             answer: (respond) => {
-              runtime.at(runtime.choices.int(answerMsMax + 1), respond);
+              runtime.at(
+                moded ? 0 : runtime.choices.int(answerMsMax + 1),
+                respond,
+              );
             },
           });
           if (again) driver.restarted(yield* snapshot);
+          else if (moded) driver.started(yield* snapshot);
           for (;;) {
             const step = driver.next();
             if (step === undefined) return;
             if ("waitMs" in step) {
               yield* Effect.sleep(step.waitMs);
+              if (moded) driver.waited(step.waitMs, yield* snapshot);
               continue;
             }
             const observation = yield* world.call(step.call);
+            if (driver.loseReply()) {
+              // The process dies with the answer committed and undelivered.
+              state.crashing = true;
+              runtime.at(
+                0,
+                () => {
+                  state.crashing = false;
+                  restart("reply");
+                },
+                "world",
+              );
+              return yield* Effect.never;
+            }
             driver.answered(observation, yield* snapshot);
           }
         }),
