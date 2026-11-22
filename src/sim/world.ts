@@ -122,8 +122,10 @@ class WorldSocket implements Socket.WebSocketLike {
     for (const listener of this.listeners.get(type) ?? [])
       listener(event as Socket.WebSocketEvent);
   }
-  frame(frame: object, delay = 0): void {
-    this.raw(JSON.stringify(frame), delay);
+  // onArrived runs when the frame reaches the listener, not when a closed
+  // socket drops it.
+  frame(frame: object, delay = 0, onArrived?: () => void): void {
+    this.raw(JSON.stringify(frame), delay, false, onArrived);
   }
   // When the latest frame arrived, and the latest frame that does not
   // decode, for R20's check below.
@@ -132,10 +134,16 @@ class WorldSocket implements Socket.WebSocketLike {
   malformed(data: string, delay = 0): void {
     this.raw(data, delay, true);
   }
-  private raw(data: string, delay: number, malformed = false): void {
+  private raw(
+    data: string,
+    delay: number,
+    malformed = false,
+    onArrived?: () => void,
+  ): void {
     if (this.epoch !== this.world.runtime.epoch) return;
     this.world.answer(() => {
       if (this.readyState !== 1) return;
+      onArrived?.();
       const now = this.world.runtime.nowMs;
       // A frame that comes after a silence past the idle limit, as one
       // does on waking from sleep, may meet the listener's idle reconnect
@@ -308,8 +316,10 @@ export class World {
   private sessionMarks = false;
   private markId = 100;
   // R20: the ts of each envelope sent with a message that does not decode,
-  // and how often each such envelope was acknowledged.
+  // and, by envelope id, how often one reached the listener and how often
+  // the listener acknowledged it.
   private readonly malformedTs = new Set<string>();
+  private readonly malformedArrivals = new Map<string, number>();
   private readonly malformedAcks = new Map<string, number>();
   private malformedCounter = 0;
   // R21: messages in the watched channel's history that do not decode, by
@@ -1089,13 +1099,19 @@ export class World {
   }
   ack(socket: WorldSocket, id: string): void {
     this.touch();
-    // R20: an envelope whose event does not decode is acknowledged once.
-    const malformedAcks = this.malformedAcks.get(id);
-    if (malformedAcks !== undefined) {
-      // Thrown here, it would only fail the listener's write, which it
-      // ignores; the run fails instead.
-      if (malformedAcks > 0) this.violation(`R20: acknowledged ${id} twice`);
-      this.malformedAcks.set(id, malformedAcks + 1);
+    // R20: an envelope whose event does not decode is acknowledged once
+    // each time it reaches the listener, never more: Slack can send it
+    // again before the first ack, as hello's resend does. Thrown here, the
+    // violation would only fail the listener's write, which it ignores; the
+    // run fails instead.
+    const arrivals = this.malformedArrivals.get(id);
+    if (arrivals !== undefined) {
+      const acks = (this.malformedAcks.get(id) ?? 0) + 1;
+      this.malformedAcks.set(id, acks);
+      if (acks > arrivals)
+        this.violation(
+          `R20: acknowledged ${id} ${acks} times, sent ${arrivals} times`,
+        );
     }
     const envelope = this.envelopes.get(id);
     if (envelope === undefined) return; // a duplicate frame can produce a second ack
@@ -1123,15 +1139,25 @@ export class World {
     envelope.sentOn = socket.id;
     const malformed = envelope.malformed;
     if (malformed !== undefined) {
-      // Not yet acknowledged on this socket; a resend may be once more.
-      this.malformedAcks.set(envelope.id, 0);
+      this.malformedArrivals.set(
+        envelope.id,
+        this.malformedArrivals.get(envelope.id) ?? 0,
+      );
       this.answer(() => {
         if (socket.readyState !== 1 || this.outage) return;
-        socket.frame({
-          type: "events_api",
-          envelope_id: envelope.id,
-          payload: { event: malformed },
-        });
+        socket.frame(
+          {
+            type: "events_api",
+            envelope_id: envelope.id,
+            payload: { event: malformed },
+          },
+          0,
+          () =>
+            this.malformedArrivals.set(
+              envelope.id,
+              (this.malformedArrivals.get(envelope.id) ?? 0) + 1,
+            ),
+        );
       }, delay);
       return;
     }

@@ -57,6 +57,18 @@ describe("simulator", () => {
   });
 });
 
+describe("kept runs", () => {
+  // R20: the fake sent an envelope that does not decode twice on one
+  // socket before the listener acknowledged it, once on its own and once
+  // in hello's resend of what is unacknowledged. The listener acknowledged
+  // each delivery, as it must; the checker once counted that as twice.
+  it("R20: an envelope that does not decode, sent twice, may be acknowledged twice (seed 30)", async () => {
+    const result = await runSimulation({ seed: 30, tape: [137340] });
+    expect(result.failure).toBeNull();
+    expect(result.coverage.malformedEnvelopes).toBeGreaterThan(0);
+  });
+});
+
 describe("sampled pass", () => {
   // Split across threads, the seeds must fail as a single thread's do, in
   // seed order. Two workers force the split on any runner.
