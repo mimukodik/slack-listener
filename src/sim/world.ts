@@ -592,7 +592,14 @@ export class World {
               const call = `${method} ${ts}`;
               const failures = (this.slack.reactionFailures.get(call) ?? 0) + 1;
               this.slack.reactionFailures.set(call, failures);
-              if (failures >= reactionTries) this.slack.reactionGivenUp.add(ts);
+              if (failures >= reactionTries) {
+                this.slack.reactionGivenUp.add(ts);
+                const own = [...(this.slack.reactions.get(ts) ?? [])].some(
+                  (key) => key.startsWith(`${people.ownBot}:`),
+                );
+                if (method === "reactions.add" && !own)
+                  this.slack.firstMarkGivenUp.add(ts);
+              }
               this.failCall(resolve, reject);
               return;
             }
@@ -751,8 +758,8 @@ export class World {
   // The handled mark comes only once the own side answered after it in its
   // thread or the session marked it done, and is never taken off; the seen
   // mark comes off only once the handled one is on, so the message is never
-  // without a mark, unless the handled call was given up or the message is
-  // gone.
+  // without a mark, unless the message is gone. A given-up add of the
+  // handled mark keeps the seen one, so it excuses nothing here.
   private reaction(
     method: "reactions.add" | "reactions.remove",
     params: URLSearchParams,
@@ -797,7 +804,6 @@ export class World {
       action === "remove" &&
       stored !== undefined &&
       !stored.deleted &&
-      !this.slack.reactionGivenUp.has(ts) &&
       this.slack.reactions.get(ts)?.has(`${people.ownBot}:${handledName}`) !==
         true
     )
