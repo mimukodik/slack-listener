@@ -90,6 +90,9 @@ export const Task = Schema.Struct({
   state: Schema.Literals(states),
   // The principal that claimed it last, kept once it is final.
   claimant: Schema.NullOr(PrincipalId),
+  // When it was claimed last; null until its first claim. Claims take the
+  // task claimed least recently first.
+  claimedAt: Schema.NullOr(Schema.Int),
   // When the lease lapses; null when no lease runs (not claimed, suspended
   // while waiting on input, or final).
   leaseExpiresAt: Schema.NullOr(Schema.Int),
@@ -377,19 +380,34 @@ export function decide(
   return Result.succeed(changeOf(command));
 }
 
-// The first task, oldest first, that has every label asked for and that a
-// claim by this actor may take now.
+// Least recently claimed first: never claimed before any claimed task, then
+// by the time of the last claim, ties in creation order. Oldest first would
+// let a task that keeps lapsing starve every younger lapsed one (the TLC
+// lasso in DECISIONS.md).
+export function claimOrder(a: Task, b: Task): number {
+  if (a.claimedAt === b.claimedAt) return 0;
+  if (a.claimedAt === null) return -1;
+  if (b.claimedAt === null) return 1;
+  return a.claimedAt - b.claimedAt;
+}
+
+// The task claimed least recently, of those in creation order that have
+// every label asked for and that a claim by this actor may take now.
 export function pickReady(
   candidates: readonly Task[],
   labels: readonly string[],
   actor: string,
   now: number,
 ): Task | undefined {
-  return candidates.find(
-    (task) =>
-      labels.every((label) => task.labels.includes(label)) &&
-      Result.isSuccess(decide(task, { _tag: "claim", leaseMs: 1 }, actor, now)),
-  );
+  return [...candidates]
+    .sort(claimOrder)
+    .find(
+      (task) =>
+        labels.every((label) => task.labels.includes(label)) &&
+        Result.isSuccess(
+          decide(task, { _tag: "claim", leaseMs: 1 }, actor, now),
+        ),
+    );
 }
 
 function created(event: Event, title: string, labels: readonly string[]) {
@@ -400,6 +418,7 @@ function created(event: Event, title: string, labels: readonly string[]) {
     creator: event.actor,
     state: "submitted",
     claimant: null,
+    claimedAt: null,
     leaseExpiresAt: null,
     leaseRemainingMs: null,
     input: null,
@@ -430,6 +449,7 @@ function applied(task: Task, event: Event): Task {
       return {
         ...moved,
         claimant: event.actor,
+        claimedAt: at,
         leaseExpiresAt: at + change.leaseMs,
       };
     case "renewed":

@@ -151,6 +151,7 @@ export class Model {
         creator: principal,
         state: "submitted",
         claimant: null,
+        claimedAt: null,
         leaseExpiresAt: null,
         leaseRemainingMs: null,
         input: null,
@@ -171,14 +172,21 @@ export class Model {
 
   private claim(principal: Principal, input: Input, now: number): Expected {
     const wanted = strs(input, "labels");
-    const task = [...this.tasks.values()].find(
-      (each) =>
-        wanted.every((label) => each.labels.includes(label)) &&
-        (each.state === "submitted" ||
-          (each.state === "working" &&
-            each.leaseExpiresAt !== null &&
-            each.leaseExpiresAt <= now)),
-    );
+    // Least recently claimed first, never claimed first, ties by creation.
+    const task = [...this.tasks.values()]
+      .sort(
+        (a, b) =>
+          (a.claimedAt ?? Number.MIN_SAFE_INTEGER) -
+          (b.claimedAt ?? Number.MIN_SAFE_INTEGER),
+      )
+      .find(
+        (each) =>
+          wanted.every((label) => each.labels.includes(label)) &&
+          (each.state === "submitted" ||
+            (each.state === "working" &&
+              each.leaseExpiresAt !== null &&
+              each.leaseExpiresAt <= now)),
+      );
     if (task === undefined) return ok({ _tag: "NoneReady" });
     const leaseMs = num(input, "leaseMs");
     const claimed = this.record(
@@ -186,6 +194,7 @@ export class Model {
         ...task,
         state: "working",
         claimant: principal,
+        claimedAt: now,
         leaseExpiresAt: now + leaseMs,
       },
       principal,
@@ -322,14 +331,22 @@ export class Model {
   // The store as the model has it: the tasks, the events and which request
   // keys were answered.
   snapshotEquals(snapshot: Snapshot): boolean {
+    return this.snapshotDiff(snapshot) === undefined;
+  }
+
+  // The first part of the store that differs from the model: the request
+  // keys first, since a key recorded for the wrong principal or call also
+  // moves the events and tasks after it.
+  snapshotDiff(snapshot: Snapshot): "keys" | "events" | "tasks" | undefined {
     const keys = snapshot.requests.map((row) =>
       row.split(" ").slice(0, 2).join(" "),
     );
-    return (
-      canonical(snapshot.tasks) === canonical([...this.tasks.values()]) &&
-      canonical(snapshot.events) === canonical(this.events) &&
-      canonical(keys) === canonical([...this.requests.keys()].sort())
-    );
+    if (canonical(keys) !== canonical([...this.requests.keys()].sort()))
+      return "keys";
+    if (canonical(snapshot.events) !== canonical(this.events)) return "events";
+    if (canonical(snapshot.tasks) !== canonical([...this.tasks.values()]))
+      return "tasks";
+    return undefined;
   }
 }
 

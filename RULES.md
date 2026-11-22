@@ -156,7 +156,8 @@ sessions, page or Slack.
   until that time. It is suspended while the task waits on input and resumes with
   the time it had left when the answer comes.
 - **Ready:** a submitted task, or a working one whose lease has lapsed. A claim takes
-  the oldest ready task that has the labels it asks for.
+  the ready task with the labels it asks for that was claimed least recently: one
+  never claimed first, ties in the order the tasks were created.
 - **Waiting:** an input-required task waits on one principal, since the time it
   asked. That principal's inbox lists every task waiting on it, longest first, each
   with how long it has waited.

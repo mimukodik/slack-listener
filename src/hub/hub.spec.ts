@@ -29,7 +29,12 @@ import {
   settableClock,
 } from "./fixture.ts";
 import { runHubSimulation } from "./sim/simulator.ts";
-import { holdWriterLock, type Snapshot, sqliteStoreLayer } from "./store.ts";
+import {
+  holdWriterLock,
+  type Snapshot,
+  sqliteStoreLayer,
+  TaskStore,
+} from "./store.ts";
 
 // A sequence of calls and the time each is made at.
 type Timed = {
@@ -369,6 +374,136 @@ describe("the inbox", () => {
   });
 });
 
+describe("claim order", () => {
+  // The TLC lasso from the TLA+ spike (design-oldestFirstStarves): with
+  // oldest-first claims, one worker reclaims t1 each time it lapses, and t2
+  // never runs. Least recently claimed first takes turns.
+  it("ends a lease at its expiry instant: the old holder is refused there and a new claim succeeds", async () => {
+    const step = (
+      bearer: string,
+      action: string,
+      input: Record<string, unknown>,
+    ): Call => ({ action, input, bearer, surface: "direct" });
+    const timed: Timed = {
+      calls: [
+        step("h-ann", "taskCreate", {
+          requestKey: "c",
+          title: "t",
+          labels: [],
+        }),
+        step("h-agent1", "taskClaim", {
+          requestKey: "a",
+          labels: [],
+          leaseMs: 1000,
+        }),
+        step("h-agent2", "taskClaim", {
+          requestKey: "b",
+          labels: [],
+          leaseMs: 1000,
+        }),
+        step("h-agent1", "taskRenew", {
+          taskId: "T1",
+          requestKey: "r",
+          leaseMs: 1000,
+        }),
+        step("h-agent2", "taskClaim", {
+          requestKey: "d",
+          labels: [],
+          leaseMs: 1000,
+        }),
+      ],
+      // Claimed at 10 for 1000 ms: live at 1009, lapsed at 1010.
+      at: [0, 10, 1009, 1010, 1010],
+    };
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const beneath = yield* Clock.Clock;
+        const now = { ms: 0 };
+        return yield* runSequenceWith(hubFixture, timed.calls, "chosen", {
+          before: (index) => {
+            now.ms = timed.at[index] ?? now.ms;
+          },
+        }).pipe(
+          Effect.provideService(
+            Clock.Clock,
+            settableClock(beneath, () => now.ms),
+          ),
+        );
+      }).pipe(Effect.provide(hubPlatformLayer)),
+    );
+    const shape = run.observations.map((observation) =>
+      observation.kind === "failure"
+        ? (observation.error as { _tag: string })._tag
+        : observation.kind === "success"
+          ? ((observation.value as { _tag?: string })._tag ?? "success")
+          : observation.kind,
+    );
+    expect(shape).toEqual([
+      "success",
+      "Claimed",
+      "NoneReady",
+      "LeaseNotHeld",
+      "Claimed",
+    ]);
+  });
+
+  it("takes the task claimed least recently, so a task that keeps lapsing starves no other", async () => {
+    const step = (
+      bearer: string,
+      action: string,
+      input: Record<string, unknown>,
+    ): Call => ({ action, input, bearer, surface: "direct" });
+    const claim = (requestKey: string) =>
+      step("h-agent1", "taskClaim", {
+        requestKey,
+        labels: [],
+        leaseMs: 1000,
+      });
+    const timed: Timed = {
+      calls: [
+        step("h-ann", "taskCreate", {
+          requestKey: "c1",
+          title: "t1",
+          labels: [],
+        }),
+        step("h-ann", "taskCreate", {
+          requestKey: "c2",
+          title: "t2",
+          labels: [],
+        }),
+        claim("k1"),
+        claim("k2"),
+        claim("k3"),
+        claim("k4"),
+      ],
+      at: [0, 0, 10, 2000, 4000, 6000],
+    };
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const beneath = yield* Clock.Clock;
+        const now = { ms: 0 };
+        return yield* runSequenceWith(hubFixture, timed.calls, "chosen", {
+          before: (index) => {
+            now.ms = timed.at[index] ?? now.ms;
+          },
+        }).pipe(
+          Effect.provideService(
+            Clock.Clock,
+            settableClock(beneath, () => now.ms),
+          ),
+        );
+      }).pipe(Effect.provide(hubPlatformLayer)),
+    );
+    const claimed = run.observations.slice(2).map((observation) => {
+      if (observation.kind !== "success") throw new Error("not a success");
+      return (observation.value as { task: { id: string } }).task.id;
+    });
+    // t1 lapsed at 1010: t2 was never claimed, so it goes first. Then both
+    // have lapsed and t1 was claimed longer ago, and so on in turn.
+    expect(claimed).toEqual(["T1", "T2", "T1", "T2"]);
+  });
+});
+
 describe("what a hub handler receives", () => {
   const servedBy = {
     rest: "rest",
@@ -491,6 +626,42 @@ describe("the hub's store", () => {
     unlinkSync(lockFile);
     rmdirSync(dir);
     expect(outcome).toEqual({ second: "WriterLockHeld", third: "held" });
+  });
+
+  it("never writes an event before the last one: a clock gone back refuses the write", async () => {
+    const now = { ms: 5000 };
+    const exits = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskStore;
+        const create = (requestKey: string) =>
+          Effect.exit(
+            store.execute("slack-user-t0000-u0001", requestKey, {
+              _tag: "create",
+              title: "t",
+              labels: [],
+            }),
+          );
+        const first = yield* create("a");
+        now.ms = 4000;
+        const back = yield* create("b");
+        now.ms = 5000;
+        const level = yield* create("c");
+        const events = yield* store.events(0, 10);
+        return { first, back, level, ats: events.map((event) => event.at) };
+      }).pipe(
+        Effect.provide(sqliteStoreLayer(":memory:")),
+        Effect.provideServiceEffect(
+          Clock.Clock,
+          Effect.map(Effect.clockWith(Effect.succeed), (beneath) =>
+            settableClock(beneath, () => now.ms),
+          ),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exits.first)).toBe(true);
+    expect(Exit.hasDies(exits.back)).toBe(true);
+    expect(Exit.isSuccess(exits.level)).toBe(true);
+    expect(exits.ats).toEqual([5000, 5000]);
   });
 
   it("replays a seed of the hub simulator: the same run, step for step", async () => {
