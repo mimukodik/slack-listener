@@ -1,10 +1,8 @@
-// Liveness failures that the simulator's seeded yield budget reaches and
-// Effect's default budget does not: an interrupt Effect 4.1.4 loses, shown
-// with Effect alone, and a bare MCP server that stalls in memory and answers
-// an empty 500 over HTTP, whose causes are not found. They are pinned here,
-// so that a change that fixes any of them fails these tests and
-// withFixedBudget (agreement.ts) can be reconsidered (DECISIONS.md,
-// 2026-11-22).
+// Liveness failures that the simulator's seeded yield budget reached in
+// Effect 4.1.4 and patches/effect@4.1.4.patch fixes: an interrupt lost by a
+// fiber not yet started, a write lost by RPC's protocol buffers, and an RPC
+// client ended before its request registered. They stay here as regression
+// tests, so dropping or outgrowing the patch shows at once.
 import { describe, expect, it } from "bun:test";
 
 import { Deferred, Effect, Layer, Scheduler, Schema } from "effect";
@@ -19,9 +17,8 @@ import {
 
 import { host, withTripwire } from "../sim/host.ts";
 import { SimRuntime } from "../sim/runtime.ts";
-import { withFixedBudget } from "./agreement.ts";
 
-describe("Effect 4.1.4 loses an interrupt under a yield budget of one", () => {
+describe("an interrupt under a yield budget of one", () => {
   // A scheduler whose tasks run only when the test drains them, and whose
   // budget the test sets, as the simulator's turn budget is set.
   function manual() {
@@ -46,10 +43,9 @@ describe("Effect 4.1.4 loses an interrupt under a yield budget of one", () => {
   }
 
   // A fiber forked but not yet started is interrupted; the interrupt's own
-  // evaluation yields at its first operation. The fiber's pending start task
-  // then cancels that yield and runs the body: the interrupt is lost, and the
-  // fiber waits on. It is detached, so no parent's end interrupts it again;
-  // in the simulator a scope's close waited on such a fiber forever.
+  // evaluation yields at its first operation. Unpatched, the fiber's pending
+  // start task then cancelled that yield and ran the body: the interrupt was
+  // lost, and a scope's close waited on the fiber forever.
   function forkThenInterrupt(budget: number) {
     const { scheduler, state, drain } = manual();
     const program = Effect.gen(function* () {
@@ -73,16 +69,16 @@ describe("Effect 4.1.4 loses an interrupt under a yield budget of one", () => {
     expect(exit?._tag).toBe("Failure");
   });
 
-  it("loses the interrupt of a child that has not started yet", () => {
-    expect(forkThenInterrupt(1)).toBeUndefined();
+  it("ends a child interrupted before it started", () => {
+    expect(forkThenInterrupt(1)?._tag).toBe("Failure");
   });
 });
 
-// The second and third failures are not attributed. A bare MCP server with
-// one tool of its own, and none of the contract's code, stalls in memory and
-// answers an empty 500 over HTTP for some seeds under the seeded budget, and
-// does neither under the fixed one; nothing here shows whether Effect or the
-// simulator is the cause.
+// A bare MCP server with one tool of its own and none of the contract's code.
+// Unpatched, seed 216 stalled it in memory (a protocol write created before
+// the reader was installed and run after it went to a buffer nobody replays)
+// and seed 1333 got an empty 500 over HTTP (a request fiber that yielded
+// before registering let the client's Eof end the response).
 describe("a bare MCP server under the simulator's seeded budget", () => {
   const Noop = Tool.make("noop", {
     description: "Does nothing.",
@@ -114,9 +110,8 @@ describe("a bare MCP server under the simulator's seeded budget", () => {
     return value.kind;
   }
 
-  it("leaves a ping unanswered for seed 216, and answers it under the fixed budget", async () => {
-    expect(await outcome(216, pings)).toBe("stuck");
-    expect(await outcome(216, withFixedBudget(pings))).toBe("done");
+  it("answers the ping for seed 216", async () => {
+    expect(await outcome(216, pings)).toBe("done");
   });
 
   // The same server over Streamable HTTP, behind a web handler on the
@@ -185,20 +180,15 @@ describe("a bare MCP server under the simulator's seeded budget", () => {
       }),
     ).pipe(Effect.orDie);
 
-  it("answers an empty 500 over HTTP for seed 1333, and only 200s under the fixed budget", async () => {
-    const statusesOf = async (fixed: boolean) => {
-      const runtime = new SimRuntime(1333);
-      const statuses: number[] = [];
-      const program = calls(runtime, statuses);
-      const { value, tripped } = await withTripwire(async () => {
-        runtime.start(fixed ? withFixedBudget(program) : program);
-        return runtime.run({ stepsMax: 1_000_000, timeMsMax: 3_600_000 }, host);
-      });
-      expect(tripped).toEqual([]);
-      expect(value.kind).toBe("done");
-      return statuses;
-    };
-    expect(await statusesOf(false)).toContain(500);
-    expect(new Set(await statusesOf(true))).toEqual(new Set([200]));
+  it("answers only 200s over HTTP for seed 1333", async () => {
+    const runtime = new SimRuntime(1333);
+    const statuses: number[] = [];
+    const { value, tripped } = await withTripwire(async () => {
+      runtime.start(calls(runtime, statuses));
+      return runtime.run({ stepsMax: 1_000_000, timeMsMax: 3_600_000 }, host);
+    });
+    expect(tripped).toEqual([]);
+    expect(value.kind).toBe("done");
+    expect(new Set(statuses)).toEqual(new Set([200]));
   });
 });

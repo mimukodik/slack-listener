@@ -3,7 +3,7 @@
 // Every run must give the same observation for every call and leave the store
 // in the same state; direct calls to invoke are the reference. It runs on
 // Effect's default runtime, or on SimRuntime with a seed (runSimulated).
-import { Context, Effect, Scheduler } from "effect";
+import { Context, Effect } from "effect";
 
 import { host, withTripwire } from "../sim/host.ts";
 import { type Limits, SimRuntime } from "../sim/runtime.ts";
@@ -113,36 +113,6 @@ export const simLimits: Limits = { stepsMax: 1_000_000, timeMsMax: 3_600_000 };
 // The longest a REST answer takes on the simulated clock.
 export const answerMsMax = 20;
 
-// Effect's own budget: a fiber yields after this many operations in a turn,
-// as under the default scheduler.
-const opsPerTurn = 2048;
-
-// The simulator's scheduler with Effect's fixed yield budget in place of the
-// seeded one. The seed still picks the order of every task and every answer's
-// delay, but no longer where a fiber is preempted: SimRuntime still draws a
-// budget each turn and this scheduler ignores it, so the draws, and with them
-// the rest of the seed's choices, stay as they were. The seeded budget
-// reaches liveness failures that the fixed one does not (DECISIONS.md,
-// 2026-11-22; pinned in effect-liveness.spec.ts): on this world, 3 of 5000
-// runs failed with an empty MCP 500 under it and none under the fixed one.
-// A narrower floor is not enough: with no budget below 2, seed 216 still
-// stalls a bare McpTest server.
-export function withFixedBudget<A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> {
-  return Effect.gen(function* () {
-    const seeded = yield* Scheduler.Scheduler;
-    const fixed: Scheduler.Scheduler = {
-      executionMode: seeded.executionMode,
-      shouldYield: (fiber) => fiber.currentOpCount >= opsPerTurn,
-      makeDispatcher: () => seeded.makeDispatcher(),
-    };
-    return yield* effect.pipe(
-      Effect.provideService(Scheduler.Scheduler, fixed),
-    );
-  });
-}
-
 export type Simulated = {
   readonly outcome: "done" | "failed" | "stuck" | "limit";
   readonly agreement: Agreement | undefined;
@@ -151,7 +121,8 @@ export type Simulated = {
 };
 
 // The agreement run as one process on SimRuntime: the seed picks the order of
-// every task and how long each REST answer takes, and no real timer may run.
+// every task, each turn's yield budget and how long each REST answer takes,
+// and no real timer may run.
 export async function runSimulated(
   seed: number,
   calls: readonly Call[],
@@ -169,7 +140,6 @@ export async function runSimulated(
       }),
     ),
     Effect.provide(platformLayer),
-    withFixedBudget,
   );
   const { value, tripped } = await withTripwire(async () => {
     runtime.start(program);

@@ -18,6 +18,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "effect@4.1.4": "patches/effect@4.1.4.patch",
+  },
   "packages": {
     "@effect/platform-bun": ["@effect/platform-bun@4.1.4", "", { "dependencies": { "@effect/platform-node-shared": "4.1.4" }, "peerDependencies": { "effect": "^4.1.4" } }, "sha512-Vdq82GOrD5HVF43aXVwHeX+4uIOrgAnjju9MEyizzFZ3yt3A6x9prtmHej1q/zAOaeNddtkpPr2ExHEvZ13S6Q=="],
 

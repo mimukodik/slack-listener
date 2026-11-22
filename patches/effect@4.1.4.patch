@@ -1,0 +1,137 @@
+diff --git a/dist/internal/effect.js b/dist/internal/effect.js
+index f6b07eb365ae647047ecf7555f031f131e683757..1b6c814e8ebf12bde35789e85348dfbed6904676 100644
+--- a/dist/internal/effect.js
++++ b/dist/internal/effect.js
+@@ -2489,7 +2489,16 @@ export const forkUnsafe = (parent, effect, immediate = false, daemon = false, un
+   } else {
+     // Preserve the fork context rather than the dispatcher's context.
+     child._asyncContext = captureAsyncContext();
+-    parentRuntime.currentDispatcher.scheduleTask(() => child.evaluate(effect), 0);
++    // patch: the pending start is a pending yield, so an interrupt that reaches
++    // the child first cancels it; else the start cancelled the interrupt's own
++    // yield and ran the body, and the interrupt was lost.
++    let started = false;
++    child._yielded = () => {
++      started = true;
++    };
++    parentRuntime.currentDispatcher.scheduleTask(() => {
++      if (!started) child.evaluate(effect);
++    }, 0);
+   }
+   return child;
+ };
+diff --git a/dist/rpc/RpcServer.js b/dist/rpc/RpcServer.js
+index 43715b91bab864f23d996edd8957b385a0dd654a..c07276b2111080b20a1c7546dede9303c85b981e 100644
+--- a/dist/rpc/RpcServer.js
++++ b/dist/rpc/RpcServer.js
+@@ -288,6 +288,10 @@ export const makeNoSerialization = /*#__PURE__*/Effect.fnUntraced(function* (gro
+     }), isUninterruptible ? {
+       uninterruptible: true
+     } : undefined));
++    // patch: a fiber whose first turn yields before its first operation (a
++    // budget of one) has not registered itself yet, and an Eof written now
++    // would end the client with the request unanswered; register it here too.
++    client.fibers.set(request.id, fiber);
+     fiber.addObserver(function onExit(exit) {
+       if (deferred) {
+         const fiber = trackFiber(runFork(Effect.onExit(Deferred.await(deferred), exit => {
+diff --git a/dist/rpc/Utils.js b/dist/rpc/Utils.js
+index f6d610974df01fe195c7a84e0320d6bb79ee7832..ce120dbe1af3115ec68facb04b733c59d069da59 100644
+--- a/dist/rpc/Utils.js
++++ b/dist/rpc/Utils.js
+@@ -11,10 +11,14 @@ import * as Semaphore from "../Semaphore.js";
+ export const withRun = () => f => Effect.suspend(() => {
+   const semaphore = Semaphore.makeUnsafe(1);
+   let buffer = [];
+-  let write = (...args) => Effect.contextWith(context => {
++  const buffering = (...args) => Effect.contextWith(context => {
++    // patch: run may have installed its writer between this effect's creation
++    // and its run; forward then, else the write lands in a buffer never replayed.
++    if (write !== buffering) return write(...args);
+     buffer.push([args, context]);
+     return Effect.void;
+   });
++  let write = buffering;
+   return Effect.map(f((...args) => write(...args)), a => ({
+     ...a,
+     run(f) {
+@@ -47,6 +51,10 @@ export const withRunClient = f => Effect.suspend(() => {
+   const clientBuffers = new Map();
+   const clientWrites = new Map();
+   let write = (clientId, data) => Effect.contextWith(context => {
++    // patch: as in withRun, run may have installed this client's writer since
++    // the effect was created; forward then instead of buffering for no reader.
++    const clientWrite = clientWrites.get(clientId);
++    if (clientWrite) return clientWrite(data);
+     let buffer = clientBuffers.get(clientId);
+     if (!buffer) {
+       buffer = [];
+diff --git a/src/internal/effect.ts b/src/internal/effect.ts
+index be4bf9166e531c889721671b229fb71167b13d5c..9a318e9c36e7a5f5223062328396f3280314e113 100644
+--- a/src/internal/effect.ts
++++ b/src/internal/effect.ts
+@@ -5630,7 +5630,16 @@ export const forkUnsafe = <FA, FE, A, E, R>(
+   } else {
+     // Preserve the fork context rather than the dispatcher's context.
+     child._asyncContext = captureAsyncContext()
+-    parentRuntime.currentDispatcher.scheduleTask(() => child.evaluate(effect as any), 0)
++    // patch: the pending start is a pending yield, so an interrupt that reaches
++    // the child first cancels it; else the start cancelled the interrupt's own
++    // yield and ran the body, and the interrupt was lost.
++    let started = false
++    child._yielded = () => {
++      started = true
++    }
++    parentRuntime.currentDispatcher.scheduleTask(() => {
++      if (!started) child.evaluate(effect as any)
++    }, 0)
+   }
+   return child
+ }
+diff --git a/src/rpc/RpcServer.ts b/src/rpc/RpcServer.ts
+index 918f482fcf7f4b6bb08c7f871e711744e50edd88..094ecddc18649c22b1c49c928ef8957c7194cbce 100644
+--- a/src/rpc/RpcServer.ts
++++ b/src/rpc/RpcServer.ts
+@@ -424,6 +424,10 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any>(
+         isUninterruptible ? { uninterruptible: true } : undefined
+       )
+     )
++    // patch: a fiber whose first turn yields before its first operation (a
++    // budget of one) has not registered itself yet, and an Eof written now
++    // would end the client with the request unanswered; register it here too.
++    client.fibers.set(request.id, fiber)
+     fiber.addObserver(function onExit(exit: Exit.Exit<any, any>): void {
+       if (deferred) {
+         const fiber = trackFiber(
+diff --git a/src/rpc/Utils.ts b/src/rpc/Utils.ts
+index e371ff3f8f690c5c78963ebda911d2670c6480ca..efc611673af3bcee5e0261165e0fccb778323522 100644
+--- a/src/rpc/Utils.ts
++++ b/src/rpc/Utils.ts
+@@ -27,11 +27,15 @@ export const withRun = <
+   Effect.suspend(() => {
+     const semaphore = Semaphore.makeUnsafe(1)
+     let buffer: Array<[Array<any>, Context.Context<never>]> = []
+-    let write = (...args: Array<any>): Effect.Effect<void> =>
++    const buffering = (...args: Array<any>): Effect.Effect<void> =>
+       Effect.contextWith((context) => {
++        // patch: run may have installed its writer between this effect's creation
++        // and its run; forward then, else the write lands in a buffer never replayed.
++        if (write !== buffering) return write(...args)
+         buffer.push([args, context])
+         return Effect.void
+       })
++    let write = buffering
+     return Effect.map(f((...args) => write(...args)), (a) => ({
+       ...a,
+       run(f) {
+@@ -74,6 +78,10 @@ export const withRunClient = <EX, RX>(
+     const clientWrites = new Map<number, (data: FromServerEncoded) => Effect.Effect<void>>()
+     let write = (clientId: number, data: FromServerEncoded): Effect.Effect<void> =>
+       Effect.contextWith((context) => {
++        // patch: as in withRun, run may have installed this client's writer since
++        // the effect was created; forward then instead of buffering for no reader.
++        const clientWrite = clientWrites.get(clientId)
++        if (clientWrite) return clientWrite(data)
+         let buffer = clientBuffers.get(clientId)
+         if (!buffer) {
+           buffer = []
