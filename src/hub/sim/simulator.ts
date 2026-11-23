@@ -32,7 +32,6 @@ import {
 } from "../../action/harness.ts";
 import { host, withTripwire } from "../../sim/host.ts";
 import { SimRuntime } from "../../sim/runtime.ts";
-import { drawSwarm } from "../../sim/swarm.ts";
 import { hubActionsOver, hubPlatformLayer, hubPrincipals } from "../fixture.ts";
 import { canonical, type Snapshot, storeLayer, TaskStore } from "../store.ts";
 import { type Expected, type Input, Model, ruleFault } from "./model.ts";
@@ -83,45 +82,11 @@ export type HubResult = {
   readonly coverage: HubCoverage;
   // How many scheduler events the run took: two runs of a seed take the same.
   readonly entries: number;
-  // The swarm mask, what the run left on; null in a plain run.
-  readonly swarm: readonly string[] | null;
 };
 
 const callers = ["h-ann", "h-ben", "h-agent1", "h-agent2"] as const;
 const outsiders = ["h-chan", "h-eve", "h-nobody"] as const;
 const crashesMax = 4;
-// What plan picks from; an action listed twice is picked twice as often.
-const actionPool = [
-  "taskCreate",
-  "taskCreate",
-  "taskClaim",
-  "taskClaim",
-  "taskRenew",
-  "taskRequestInput",
-  "taskRequestInput",
-  "taskAnswer",
-  "taskAnswer",
-  "taskAmend",
-  "taskCancel",
-  "taskComplete",
-  "taskComplete",
-  "taskFail",
-  "taskGet",
-  "taskEvents",
-  "taskWaiting",
-];
-// Swarm testing (BER-2419): the call kinds a swarm run may switch off, and
-// its other behaviours and faults.
-const swarmCalls = [...new Set(actionPool)];
-const swarmFaults = [
-  "wait",
-  "repeat",
-  "sharedKey",
-  "outsider",
-  "crashTimer",
-  "crashStatement",
-  "crashTransaction",
-];
 const startMs = 1_794_900_000_000;
 const answerMsMax = 20;
 // Where a crash lands: before a statement inside a write transaction,
@@ -275,35 +240,17 @@ class Driver {
 
   private readonly mode: Mode | undefined;
   private fate: "answer" | "lose" | "crash" = "answer";
-  // The swarm mask, null in a plain run, and the calls it left on.
-  readonly swarm: ReadonlySet<string> | null;
-  private readonly actions: readonly string[];
 
-  constructor(runtime: SimRuntime, steps: number, mode?: Mode, swarm = false) {
+  constructor(runtime: SimRuntime, steps: number, mode?: Mode) {
     this.runtime = runtime;
     this.steps = steps;
     this.mode = mode;
-    const mask =
-      swarm && mode === undefined
-        ? drawSwarm(runtime.choices, swarmCalls, swarmFaults)
-        : null;
-    this.swarm = mask;
-    this.actions =
-      mask === null ? actionPool : actionPool.filter((each) => mask.has(each));
-  }
-
-  on(feature: string): boolean {
-    return this.swarm?.has(feature) ?? true;
   }
 
   // Whether to crash before this statement: a mode's planned crash comes
   // at the first statement inside the call's transaction.
   crashHere(inTransaction: boolean): boolean {
-    if (this.mode === undefined)
-      return (
-        this.on(inTransaction ? "crashTransaction" : "crashStatement") &&
-        this.int(1000) < 5
-      );
+    if (this.mode === undefined) return this.int(1000) < 5;
     if (this.fate === "crash" && inTransaction) {
       this.fate = "answer";
       return true;
@@ -369,8 +316,7 @@ class Driver {
     if (this.mode !== undefined) return this.nextOf(this.mode);
     if (this.failure !== null || this.done >= this.steps) return undefined;
     if (this.inFlight !== undefined) return this.send(this.inFlight.step, true);
-    if (this.on("wait") && this.chance(15))
-      return { waitMs: this.pick([50, 400, 1500, 4000]) };
+    if (this.chance(15)) return { waitMs: this.pick([50, 400, 1500, 4000]) };
     return this.send({ call: this.plan() }, false);
   }
 
@@ -551,9 +497,9 @@ class Driver {
 
   private plan(): Call {
     const surface = this.pick(surfaces);
-    if (this.last !== undefined && this.on("repeat") && this.chance(8)) {
+    if (this.last !== undefined && this.chance(8)) {
       const last = this.last;
-      if (this.on("sharedKey") && this.chance(15)) {
+      if (this.chance(15)) {
         // The same key from another principal: a call of its own.
         this.coverage.sharedKeys += 1;
         const others = callers.filter((each) => each !== last.bearer);
@@ -567,11 +513,26 @@ class Driver {
             input: { ...last.input, ...this.variant(last.action) },
           };
     }
-    const bearer =
-      this.on("outsider") && this.chance(5)
-        ? this.pick(outsiders)
-        : this.pick(callers);
-    const action = this.pick(this.actions);
+    const bearer = this.chance(5) ? this.pick(outsiders) : this.pick(callers);
+    const action = this.pick([
+      "taskCreate",
+      "taskCreate",
+      "taskClaim",
+      "taskClaim",
+      "taskRenew",
+      "taskRequestInput",
+      "taskRequestInput",
+      "taskAnswer",
+      "taskAnswer",
+      "taskAmend",
+      "taskCancel",
+      "taskComplete",
+      "taskComplete",
+      "taskFail",
+      "taskGet",
+      "taskEvents",
+      "taskWaiting",
+    ]);
     const input = this.inputFor(action, bearer);
     const call = {
       action,
@@ -745,17 +706,9 @@ export async function runHubSimulation(options: {
   // A fixed or bounded mode: answers come at once, no timer crashes, and
   // the mode's crashes and lost answers instead of seeded ones.
   readonly mode?: Mode;
-  // Swarm testing (BER-2419): switch a seeded half of the call kinds and
-  // faults off for this run; a mode ignores it.
-  readonly swarm?: boolean;
 }): Promise<HubResult> {
   const runtime = new SimRuntime(options.seed, [], startMs, false);
-  const driver = new Driver(
-    runtime,
-    options.steps,
-    options.mode,
-    options.swarm,
-  );
+  const driver = new Driver(runtime, options.steps, options.mode);
   const moded = options.mode !== undefined;
   const disk = new Disk();
   // Connections live in the world's scope: a crashed process abandons its
@@ -771,7 +724,7 @@ export async function runHubSimulation(options: {
   };
 
   const crashTimer = () => {
-    if (moded || !driver.crashable || !driver.on("crashTimer")) return;
+    if (moded || !driver.crashable) return;
     runtime.at(
       runtime.choices.int(options.steps * 150) + 1,
       () => {
@@ -919,7 +872,6 @@ export async function runHubSimulation(options: {
       failure,
       coverage: driver.coverage,
       entries: runtime.entries,
-      swarm: driver.swarm === null ? null : [...driver.swarm],
     };
   } finally {
     Effect.runSync(Scope.close(connections, Exit.void));

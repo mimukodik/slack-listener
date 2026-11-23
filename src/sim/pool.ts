@@ -17,7 +17,6 @@ export type Task =
       readonly first: number;
       readonly last: number;
       readonly actions: number;
-      readonly swarm: boolean;
     };
 
 export type Answer<T extends Task> = T extends { readonly kind: "subtree" }

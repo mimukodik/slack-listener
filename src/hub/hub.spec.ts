@@ -673,15 +673,4 @@ describe("the hub's store", () => {
     expect(other.entries).not.toBe(first.entries);
     expect(first.coverage.crashes).toBeGreaterThan(0);
   });
-
-  it("swarm: a hub seed draws its mask before the run and replays it; a plain run draws none", async () => {
-    const first = await runHubSimulation({ seed: 7, steps: 60, swarm: true });
-    const second = await runHubSimulation({ seed: 7, steps: 60, swarm: true });
-    const other = await runHubSimulation({ seed: 8, steps: 60, swarm: true });
-    expect(first.ok, first.failure ?? "").toBe(true);
-    expect(second).toEqual(first);
-    expect(first.swarm).not.toEqual(other.swarm);
-    expect(first.swarm?.some((kind) => kind.startsWith("task"))).toBe(true);
-    expect((await runHubSimulation({ seed: 7, steps: 60 })).swarm).toBeNull();
-  });
 });
