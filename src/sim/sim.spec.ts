@@ -55,6 +55,28 @@ describe("simulator", () => {
     await runSimulation({ seed: 18, actions: 30, trace: differentTrace });
     expect(differentTrace).not.toEqual(firstTrace);
   });
+
+  it("swarm: a seed draws its mask before the run and replays it; a plain run draws none", async () => {
+    const worldActions = ["post", "reply", "edit", "remove", "elsewhere"];
+    const masks = new Set<string>();
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const first = await runSimulation({ seed, actions: 30, swarm: true });
+      const second = await runSimulation({ seed, actions: 30, swarm: true });
+      expect(second, `seed ${seed}`).toEqual(first);
+      expect(first.ok, first.failure ?? "").toBe(true);
+      const mask = first.swarm ?? [];
+      expect(
+        mask.some((kind) => [...worldActions, "noise"].includes(kind)),
+      ).toBe(true);
+      masks.add(mask.join(" "));
+      const plain = await runSimulation({ seed, actions: 30 });
+      expect(plain.swarm).toBeNull();
+      expect(await runSimulation({ seed, actions: 30, swarm: false })).toEqual(
+        plain,
+      );
+    }
+    expect(masks.size).toBeGreaterThan(1);
+  });
 });
 
 describe("kept runs", () => {

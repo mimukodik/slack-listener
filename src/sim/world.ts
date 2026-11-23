@@ -49,9 +49,55 @@ import {
   type AuthorLabel,
   type StoredMessage,
 } from "./slack-fake.ts";
+import { drawSwarm } from "./swarm.ts";
 
 // The tries R18's shell makes before it gives a reaction call up.
 const reactionTries = 3;
+
+// Swarm testing (BER-2419): the action kinds and fault classes a swarm run
+// may switch off. act's roll gives each of its kinds its share of 100, in
+// act's order; a swarm run rolls over the shares left on.
+const worldActions = [
+  "post",
+  "reply",
+  "edit",
+  "remove",
+  "elsewhere",
+  "noise",
+] as const;
+const swarmFaults = [
+  "crash",
+  "disconnect",
+  "sleep",
+  "sinkFailure",
+  "apiFailure",
+  "crashAfterDone",
+  "connectFailure",
+  "malformedAnswer",
+  "malformedFrame",
+  "unreadablePost",
+  "duplicate",
+  "malformedEnvelope",
+  "badLine",
+  "replyUnderUnreadable",
+] as const;
+type SwarmFeature =
+  | (typeof worldActions)[number]
+  | "done"
+  | (typeof swarmFaults)[number];
+const actShares: readonly (readonly [SwarmFeature, number])[] = [
+  ["crash", 3],
+  ["disconnect", 4],
+  ["sleep", 2],
+  ["sinkFailure", 3],
+  ["apiFailure", 2],
+  ["post", 36],
+  ["reply", 25],
+  ["edit", 10],
+  ["remove", 5],
+  ["elsewhere", 5],
+  ["noise", 5],
+];
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -303,6 +349,8 @@ export class World {
   private wakeAtMs = simStartMs;
   private choices;
   private readonly options: SimOptions;
+  // The swarm mask: what a swarm run left on; null in a plain run.
+  private swarm: ReadonlySet<SwarmFeature> | null = null;
   // The exhaustive pass's f: the next failable Web API call fails once, as a
   // sampled API fault fails it. failedOnce lists the methods it failed.
   private failNext = false;
@@ -359,6 +407,12 @@ export class World {
   }
   get connected(): boolean {
     return this.socket?.readyState === 1 && !this.outage;
+  }
+  private on(feature: SwarmFeature): boolean {
+    return this.swarm?.has(feature) ?? true;
+  }
+  private fault(feature: SwarmFeature): boolean {
+    return this.faultsOn && this.on(feature);
   }
   latency(min: number, max: number): number {
     return this.options.faults === false ? min : this.choices.between(min, max);
@@ -577,7 +631,8 @@ export class World {
                 method.startsWith("conversations.") &&
                 this.choices.chance(50)) ||
               (method === "apps.connections.open" &&
-                (this.outage || (this.faultsOn && this.choices.chance(10))))
+                (this.outage ||
+                  (this.fault("connectFailure") && this.choices.chance(10))))
             ) {
               this.coverage.apiFailures += 1;
               this.failCall(resolve, reject);
@@ -647,7 +702,7 @@ export class World {
     resolve: (response: Response) => void,
     reject: (error: Error) => void,
   ): void {
-    if (!this.faultsOn || !this.choices.chance(25)) {
+    if (!this.fault("malformedAnswer") || !this.choices.chance(25)) {
       reject(new Error("simulated network failure"));
       return;
     }
@@ -894,7 +949,7 @@ export class World {
       this.coverage.doneMarks += 1;
       // A crash right after the session heard its mark was taken: the mark
       // must already be on disk.
-      if (this.faultsOn && this.choices.chance(30))
+      if (this.fault("crashAfterDone") && this.choices.chance(30))
         this.schedule(this.choices.between(0, 3), () => this.crash(1000));
       return;
     }
@@ -961,10 +1016,11 @@ export class World {
     if (
       this.sessionMarks &&
       delivery.kind === "message" &&
+      this.on("done") &&
       this.choices.chance(20)
     )
       this.markDone(delivery.ts, this.choices.between(0, 5000));
-    if (this.sessionMarks && this.faultsOn && this.choices.chance(10))
+    if (this.sessionMarks && this.fault("badLine") && this.choices.chance(10))
       this.sendBadLine(this.choices.between(0, 5000));
     if (this.crashArmed) {
       this.crashArmed = false;
@@ -1168,7 +1224,7 @@ export class World {
       return;
     }
     // R20: a frame that does not decode, now and then, before an envelope.
-    if (this.faultsOn && this.choices.chance(3)) {
+    if (this.fault("malformedFrame") && this.choices.chance(3)) {
       this.coverage.malformedFrames += 1;
       socket.malformed(this.choices.pick(malformedFrames), delay);
     }
@@ -1186,7 +1242,8 @@ export class World {
     }, delay);
   }
   private emit(message: SlackMessage): void {
-    if (this.faultsOn && this.choices.chance(3)) this.postUnreadable();
+    if (this.fault("unreadablePost") && this.choices.chance(3))
+      this.postUnreadable();
     if (!this.connected || !this.running) {
       this.coverage.postsWhileDisconnected += 1;
       this.markMissedEdit(message);
@@ -1203,7 +1260,7 @@ export class World {
     const socket = this.socket;
     if (socket === null) return;
     this.sendEnvelope(socket, envelope, this.latency(0, 2500));
-    if (this.faultsOn && this.choices.chance(8)) {
+    if (this.fault("duplicate") && this.choices.chance(8)) {
       this.coverage.duplicateEnvelopes += 1;
       socket.frame(
         {
@@ -1214,7 +1271,8 @@ export class World {
         this.latency(0, 2500),
       );
     }
-    if (this.faultsOn && this.choices.chance(4)) this.emitMalformed(socket);
+    if (this.fault("malformedEnvelope") && this.choices.chance(4))
+      this.emitMalformed(socket);
     if (this.options.control === "everything")
       this.output({
         method: "notifications/claude/channel",
@@ -1428,7 +1486,9 @@ export class World {
       .filter(([, entry]) => entry.canHead)
       .map(([ts]) => ts);
     const underUnreadable =
-      this.faultsOn && unreadableParents.length > 0 && this.choices.chance(20)
+      this.fault("replyUnderUnreadable") &&
+      unreadableParents.length > 0 &&
+      this.choices.chance(20)
         ? this.choices.pick(unreadableParents)
         : null;
     const parents = this.watchedMessages((m) => !this.slack.inThread(m));
@@ -1508,7 +1568,8 @@ export class World {
   private act(): void {
     this.actionsLeft -= 1;
     this.steps += 1;
-    const roll = this.choices.int(100);
+    const roll =
+      this.swarm === null ? this.choices.int(100) : this.swarmRoll(this.swarm);
     if (this.faultsOn && roll < 3) this.crash(this.latency(1000, 60_000));
     else if (this.faultsOn && roll < 7) this.forceDisconnect();
     else if (this.faultsOn && roll < 9) this.sleep();
@@ -1523,6 +1584,20 @@ export class World {
     if (this.actionsLeft > 0)
       this.schedule(this.choices.between(200, 40_000), () => this.act());
     else this.finish();
+  }
+  // A roll over the shares left on, mapped into act's scale of 100.
+  private swarmRoll(swarm: ReadonlySet<SwarmFeature>): number {
+    const left = actShares.filter(([feature]) => swarm.has(feature));
+    let roll = this.choices.int(
+      left.reduce((sum, [, share]) => sum + share, 0),
+    );
+    let base = 0;
+    for (const [feature, share] of actShares) {
+      if (swarm.has(feature) && roll < share) return base + roll;
+      if (swarm.has(feature)) roll -= share;
+      base += share;
+    }
+    throw new Error("swarm: a roll past every share left on");
   }
   private finish(): void {
     this.sinkFailing = false;
@@ -1611,12 +1686,18 @@ export class World {
       failure: this.failure,
       steps: this.runtime.entries,
       coverage: this.coverage,
+      swarm: this.swarm === null ? null : [...this.swarm],
       session: this.session,
       slack: this.slack,
       floorMs: simStartMs,
     };
   }
   async sample(): Promise<SimResult> {
+    if (this.options.swarm === true)
+      this.swarm = drawSwarm<SwarmFeature>(this.choices, worldActions, [
+        "done",
+        ...swarmFaults,
+      ]);
     this.sessionMarks = true;
     this.schedule(this.choices.between(500, 20_000), () => this.act());
     return this.drive();

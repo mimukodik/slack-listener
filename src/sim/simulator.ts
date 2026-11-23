@@ -9,6 +9,9 @@ export interface SimOptions {
   faults?: boolean;
   trace?: string[];
   control?: "nothing" | "everything";
+  // Swarm testing (BER-2419): switch a seeded half of the world's action
+  // kinds and fault classes off for this run.
+  swarm?: boolean;
 }
 
 export interface SessionRecord {
@@ -53,6 +56,8 @@ export interface SimResult {
   failure: string | null;
   steps: number;
   coverage: Coverage;
+  // The swarm mask, what the run left on; null in a plain run.
+  swarm: readonly string[] | null;
   session: SessionRecord[];
   slack: SlackFake;
   floorMs: number;

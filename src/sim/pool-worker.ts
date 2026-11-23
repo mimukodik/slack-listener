@@ -17,7 +17,7 @@ async function perform(task: Task): Promise<Answer<Task>> {
       return result;
     }
     case "seeds":
-      return seedFailures(task.first, task.last, task.actions);
+      return seedFailures(task.first, task.last, task.actions, task.swarm);
   }
 }
 
