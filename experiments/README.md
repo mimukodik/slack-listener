@@ -16,7 +16,9 @@ Put limits on queues, state what must always hold, and let a small core decide w
 
 ### Deterministic simulation and property-based testing
 
-Generate many sequences of events. Check a rule after each step. Save the random seed so the same sequence and timing can be replayed. The early simulator found four core bugs before the first live run, including an edit lost during crash recovery. The later simulator also checked the session's actual output. Its blind spot is the fake world: a deliberately shortened retention window went undetected because sampled runs ended before the pruning path ran. [What simulation caught](../DECISIONS.md#2026-11-17-the-method-and-what-it-gave) · [What it missed](../history/arch-poc/swarm/mutants.md)
+The simulator generates sequences of Slack events, crashes and reconnects. A saved seed replays the same sequence and timing. After each step it checks safety rules such as delivery order. Before the first live run it found four bugs in the listener core, including an edit lost when the listener crashed during catch-up. Each bug now has a regression test. [Four bugs found by the simulator](../DECISIONS.md#2026-11-17-the-method-and-what-it-gave)
+
+Later we ran the whole listener in simulation and checked the messages it actually wrote to the session. That check has a limit. If two edits to the same message have identical text and fall within the same one-second edit timestamp, the checker cannot tell them apart. [What the whole-program simulator observes](../DECISIONS.md#2026-11-18-the-whole-program-in-the-simulated-world)
 
 ### Model checking with TLA+
 
