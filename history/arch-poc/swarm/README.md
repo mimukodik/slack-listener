@@ -4,7 +4,7 @@
 
 Consider the 👀 reaction marking a delivered message. Once the session handles it, the listener adds ✅ and removes 👀. A planted bug removed 👀 even when adding ✅ repeatedly failed. To expose it, the simulator needed both the session marking the message done and Slack rejecting the reaction. If either behavior was disabled for a run, the bug could not surface. Ordinary runs exposed it 803 times in 10,000 seeds. Swarm exposed it 540 times on the same seeds, and remained worse after accounting for its cheaper runs.
 
-Malformed session input was the exception. Swarm detected that bug about 28% more often per second. It also exercised fewer of the measured behaviors, so the gain fell short of the agreed criterion. This verdict covers the tested configuration on these two simulators. A workload where one kind of event routinely prevents another from happening would be a reason to revisit it. [Results by bug, coverage and decision](entry.md) · [Planted bugs and two scenarios neither simulator mode could reach](mutants.md)
+Malformed session input was the exception. Swarm detected that bug about 28% more often per second. Other behaviors still occurred, but less often. For example, per second of run time, the listener handled malformed Slack API answers only 36% as often as in ordinary simulation. The gain on malformed session input therefore fell short of the agreed coverage criterion. This verdict covers the tested configuration on these two simulators. A workload where one kind of event routinely prevents another from happening would be a reason to revisit it. [Results by bug, coverage and decision](entry.md) · [Planted bugs and two scenarios neither simulator mode could reach](mutants.md)
 
 ## How to check the numbers
 
