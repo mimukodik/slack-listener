@@ -2,7 +2,7 @@
 
 The declaration lived first in `tools/mutants.py` (exact plant text, one match each), written on 2026-11-22 before any measurement and before any swarm code. This file writes it out, with the plain kill rates measured on main `3a36ac7` (no swarm code in the tree). L13 and L14 were added on 2026-11-23, after the screen, to replace L8 and L12 (below); still before any swarm code existed.
 
-Plain kill rate: failing runs of the sampled pass, listener seeds 1..10000 x 120 actions, hub seeds 1..2500 x 80 calls. Raw rows: `raw/main-plain-<id>.tsv`; L7, L11, L13 and L14 from the second screen (`raw/main-listener-screen2.log`), after a parser fix: a failure text holding a Unicode line separator split a row, which crashed the first screen's summary for L7 and L11. A "hard" mutant is one plain kills in under 10% of runs.
+Plain kill rate: failing runs of the sampled pass, listener seeds 1..10000 x 120 actions, hub seeds 1..2500 x 80 calls. Raw rows: `raw/main-plain-<id>.tsv.gz`; L7, L11, L13 and L14 from the second screening run (the corresponding compressed seed tables are in `raw/`), after a parser fix: a failure text holding a Unicode line separator split a row, which crashed the first screen's summary for L7 and L11. A "hard" mutant is one plain kills in under 10% of runs.
 
 ## Listener (`bun run sim`, 2000 seeds in CI)
 
