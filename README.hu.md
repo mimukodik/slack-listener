@@ -4,7 +4,7 @@
   <a href="RULES.md">Szabályok</a> · <a href="PRINCIPLES.md">Elvek</a> · <a href="docs/hu/specifikacio.md">Specifikáció</a> · <a href="docs/hu/slack-app.md">Slack-app</a> · <a href="DECISIONS.md">Döntések</a> · <a href="README.md">English</a>
 </p>
 
-**Architektúrakísérletek** · [Kutatási napló, elvetett megközelítések és a háromnyelvű mérés terve](experiments/README.md)
+**Itt érdemes kezdeni.** [Milyen módszereket próbáltunk ki, melyek váltak be, és mit mérünk legközelebb?](experiments/README.md)
 
 Claude Code channel-szerver, amely felébreszt egy munkamenetet, amikor valaki ír egy Slack-csatornába, így egyetlen munkamenetnek sem kell időzítve olvasnia. Egy engedélyezett küldő minden új üzenete abba a munkamenetbe érkezik, amelyik a figyelőt elindította, idézett adatként, a szerzőjével, a `ts`-sel és a `thread_ts`-sel.
 

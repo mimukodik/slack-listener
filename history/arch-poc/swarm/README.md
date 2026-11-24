@@ -1,9 +1,34 @@
-# Swarm testing was rejected for these two simulators
+# Why we dropped swarm testing for the listener and task hub
 
-Start with [the original brief](brief.md), [mutant inventory](mutants.md), and [measurement and decision](entry.md). The comparison used the same seed blocks in both arms. The listener's runs were 120 actions; hub runs were 80 steps. The campaigns had different per-seed costs, so compare detection per summed run-second within each workload. The prespecified coverage condition also failed. The first inventory includes two unreachable candidates that were replaced before the comparison. They remain recorded as coverage gaps.
+**Ordinary simulation found 18 of 19 planted bugs more often per second.** Swarm testing gave each action or fault about a one-in-two chance of being available during a run. The idea was that removing a distracting action could make another behavior easier to reach. The team agreed in advance to keep the change if detection improved for a predeclared bug while baseline coverage held. [Original research](https://www.flux.utah.edu/paper/groce-issta12/) · [Experiment brief](brief.md)
 
-The baseline was 3a36ac7. [ce030f8](https://github.com/mimukodik/slack-listener/commit/ce030f8) contains the instrumentation; [81bf2fc](https://github.com/mimukodik/slack-listener/commit/81bf2fc) removes it and retains the decision. This is a recovery of an existing run.
+Consider the 👀 reaction marking a delivered message. Once the session handles it, the listener adds ✅ and removes 👀. A planted bug removed 👀 even when adding ✅ repeatedly failed. To expose it, the simulator needed both the session marking the message done and Slack rejecting the reaction. If either behavior was disabled for a run, the bug could not surface. Ordinary runs exposed it 803 times in 10,000 seeds. Swarm exposed it 540 times on the same seeds, and remained worse after accounting for its cheaper runs.
 
-The raw directory contains gzip-compressed TSVs: seed, outcome (1 pass, 0 detected), and run milliseconds, plus the original COV and WALL records. Free-form diagnostic text is omitted. Files prefixed with m- are the campaign (including controls); the remaining tables include screening and supplementary runs. The original aggregate tables, coverage summary and campaign log accompany the per-seed data. The original tooling is under tools; its absolute paths were parameterized for publication.
+Malformed session input was the exception. Swarm detected that bug about 28% more often per second. It also exercised fewer of the measured behaviors, so the gain fell short of the agreed criterion. This verdict covers the tested configuration on these two simulators. A workload where one kind of event routinely prevents another from happening would be a reason to revisit it. [Results by bug, coverage and decision](entry.md) · [Planted bugs and two scenarios neither simulator mode could reach](mutants.md)
 
-To regenerate the aggregate tables, copy this directory into scratch space, decompress raw/*.tsv.gz there (gzip -dk), and run tools/table.py with a block size of 2000 for listener or 500 for hub and the ordered tags printed in raw/table-listener.txt or raw/table-hub.txt. To rerun the historical mutations use a disposable checkout of ce030f8, install its locked dependencies, set SWARM_CHECKOUT to its absolute path, and run the campaign script in a scratch copy with bun, Python 3 and timeout on PATH. The mutation runner intentionally edits and restores files in that checkout. Repeated timings depend on the host.
+## How to check the numbers
+
+The listener used 10,000 seeds of 120 actions per bug and mode. The hub used 2,500 seeds of 80 calls. Each total was split into five blocks. Detection rates use detections per second of summed run time, so a faster run gets credit for fitting more attempts into the same budget. The baseline was `3a36ac7`. [Instrumentation commit](https://github.com/mimukodik/slack-listener/commit/ce030f8) · [Commit removing the unsuccessful approach](https://github.com/mimukodik/slack-listener/commit/81bf2fc)
+
+[Download the measurement archive](measurements.zip) to inspect the 65 seed tables, original campaign log, coverage summary and two reference tables. Its SHA-256 is `2cada7904fffdfbcdd38f4639dd5353bd170827c7db53383e70cebdf3e5e8942`. Each seed row records the seed, outcome (0 means the check detected the planted bug) and elapsed milliseconds. The filenames beginning with `m-` identify the campaign and controls. The remaining seed tables cover screening and supplementary runs.
+
+To reproduce all 38 reported rows, run this from the repository root with Python 3 and unzip. Each diff should be empty.
+
+```sh
+(
+  set -eu
+  study=history/arch-poc/swarm
+  scratch=$(mktemp -d)
+  cp -R "$study/tools" "$scratch/tools"
+  unzip -q "$study/measurements.zip" -d "$scratch"
+  cd "$scratch"
+  for arm in listener hub; do
+    case "$arm" in listener) block=2000 ;; hub) block=500 ;; esac
+    reference="raw/table-$arm.txt"
+    sed 's/:.*//' "$reference" | xargs python3 -I tools/table.py "$block" > "$arm.txt"
+    diff -u "$reference" "$arm.txt"
+  done
+)
+```
+
+To rerun the mutation campaign, use a disposable checkout of `ce030f8`, install its locked dependencies and set `SWARM_CHECKOUT` to its absolute path. In a scratch directory containing copies of `tools/` and an empty `raw/`, run `sh tools/campaign.sh` with Bun, Python 3 and `timeout` available. It edits and restores the disposable checkout. Timing varies by host.
