@@ -8,7 +8,7 @@ We want to choose development practices for Agent Native, a framework for apps b
 
 The listener wakes an agent session when an allowed sender posts on Slack. Imagine a laptop sleeping halfway through delivery. On wake, the listener must recover the message and account for the possibility that the session already saw it. That makes a small tool a useful test of timing, storage and recovery. The **task hub** is a separate tool that tracks who holds a task and whom it is waiting for. Some earlier tests exercised both; the language trial uses the listener. [Listener behavior rules](../RULES.md) · [Task hub model](../spec/tasks/README.md)
 
-## Which approaches earned their place?
+## Approaches we kept
 
 ### TigerStyle and a decision core
 
@@ -22,13 +22,15 @@ Generate many sequences of events. Check a rule after each step. Save the random
 
 Describe the allowed states and transitions from the written rules, then let a checker explore the possibilities within chosen limits. A counterexample exposed a real bug. If adding the ✅ handled mark repeatedly failed, the listener still removed the 👀 seen mark. The fix keeps 👀. This method can expose an ambiguous rule before implementation, but checking a simplified model leaves a separate job: reproduce the failure in the real code. [Model, findings and limits](../spec/listener/README.md) · [Fix and replay](https://github.com/mimukodik/slack-listener/commit/667a7b300f820749b02e22be90ea78d2ca4fbd6b)
 
-### Swarm testing
+## We dropped swarm testing for the listener and task hub
 
-Randomly leave out some actions for an entire run. A simpler run might reach a state that ordinary traffic rarely visits. We dropped the half-off configuration on both workloads. It exposed 18 of 19 planted bugs less often per second. Many failures needed several actions together. The exception was a bug in handling malformed session input. Swarm exposed it about 28% more often per second. [Experiment, decision and evidence](../history/arch-poc/swarm/README.md)
+We tried randomly leaving out actions and faults for an entire run, hoping to reach states that ordinary traffic rarely visits. We dropped this configuration for both the listener and the task hub. It exposed 18 of 19 planted bugs less often per second. Many failures needed several actions together. The exception was a bug in handling malformed session input. Swarm exposed it about 28% more often per second. [Experiment, decision and evidence](../history/arch-poc/swarm/README.md)
 
-How much weight should these results carry? A **planted bug** is an intentional wrong edit. Seeing a check reject that edit demonstrates one failure it can detect. A **bounded exhaustive pass** tries every allowed event sequence up to a stated length. The listener passed 680,613 sequences up to seven actions in the historical run. Longer sequences and faults absent from the simulated world remain open. [Historical checkpoint and unresolved work](../history/arch-poc/README.md)
+## What the evidence covers
 
-## Which language makes the next correct change cheaper?
+A **planted bug** is an intentional wrong edit. Seeing a check reject that edit demonstrates one failure it can detect. A **bounded exhaustive pass** tries every allowed event sequence up to a stated length. The listener passed 680,613 sequences up to seven actions in the historical run. Longer sequences and faults absent from the simulated world remain open. [Historical checkpoint and unresolved work](../history/arch-poc/README.md)
+
+## Still open: which language makes the next correct change cheaper?
 
 TypeScript with Effect gives us a working reference and a way to supply real or simulated services to the same code. Rust checks ownership and borrowing at compile time. Zig lets us make storage and capacity explicit; the programmer is responsible for how long a reference stays valid. Our hypothesis is that faster iteration in a bounded Zig design could outweigh the additional feedback Rust gives an agent. We have no scored language result yet. [Effect's service requirements](https://effect.website/docs/getting-started/the-effect-type/) · [Borrowing in Rust](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html) · [Lifetimes in Zig](https://ziglang.org/documentation/0.16.0/#Lifetime-and-Ownership)
 
