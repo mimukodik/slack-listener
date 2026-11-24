@@ -6,7 +6,6 @@
   "service_as_displayed": "Standard",
   "host": "one shared developer machine, two isolated Git worktrees",
   "timing_scope": "Dispatch timestamps include CLI startup and folder trust. Construction only.",
-  "kache": "absent from launch shell PATH; no scored Rust cache measurement",
   "arms": [
     {
       "arm": "rust",
@@ -21,6 +20,13 @@
       "base_revision": "f522128a71c3763086422b0c83cdde2c9adea608",
       "prompt_sha256": "517130a8e424610327d7a8b02be6639dbcab617d28fd0952b014a02c9f332cee",
       "prompt": "Implement the complete Zig Slack listener, the construction arm of the public three-language architecture experiment. Read AGENTS.md, experiments/listener/README.md, and experiments/listener/measurement/PROTOCOL.md. Work in experiments/listener/implementations/zig and experiments/listener/runs/construction/zig. Use the frozen listener rules and the TypeScript baseline, exclude the task hub. Start with the end-to-end slice specified there, verify the actual entry point, then continue toward all listener behavior and a usable native entry point. Write code and run local checks. Keep a construction ledger from launch, including attempts, measurements, exact commands and honest gaps; local commits are welcome. Write public-safe evidence, no private paths or names. Use synthetic peers and temporary state. No live Slack, credentials, external writes, publishing, or paid services. No Claude Code budget. Do not touch other worktrees or peek at the other native arm. The later fresh-agent maintenance cohort has not started. Only claim what you verified. Local setup or missing kache is construction context, never count an uncached run as the warm Rust benchmark. Keep the working branch local for the coordinator. If the whole port cannot be completed this turn, checkpoint concrete runnable progress and remaining behavior."
+    }
+  ],
+  "clarifications": [
+    {
+      "date": "2026-11-24",
+      "applies_to": ["rust", "zig"],
+      "message": "Owner clarification: kache is only for sharing build artifacts between sandboxes and CI. It is outside this listener experiment. Continue the port with the normal local toolchain. Remove any kache setup, replay, measurement or gate from your implementation and active documentation. Preserve historical attempts as history. This supersedes the launch prompt's cache sentence."
     }
   ]
 }
