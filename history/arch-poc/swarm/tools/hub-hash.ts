@@ -7,6 +7,14 @@ const { runHubSimulation } = await import(`${root}/src/hub/sim/simulator.ts`);
 const hash = createHash("sha256");
 for (let seed = 1; seed <= seeds; seed += 1) {
   const r = await runHubSimulation({ seed, steps });
-  hash.update(JSON.stringify({ seed, ok: r.ok, failure: r.failure, coverage: r.coverage, entries: r.entries }) + "\n");
+  hash.update(
+    JSON.stringify({
+      seed,
+      ok: r.ok,
+      failure: r.failure,
+      coverage: r.coverage,
+      entries: r.entries,
+    }) + "\n",
+  );
 }
 console.log(`hub seeds 1..${seeds}: ${hash.digest("hex")}`);

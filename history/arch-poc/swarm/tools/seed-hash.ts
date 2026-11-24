@@ -8,7 +8,14 @@ const hash = createHash("sha256");
 const perSeed: string[] = [];
 for (let seed = 1; seed <= seeds; seed += 1) {
   const r = await runSimulation({ seed, actions });
-  const line = JSON.stringify({ seed, ok: r.ok, failure: r.failure, steps: r.steps, coverage: r.coverage, session: r.session });
+  const line = JSON.stringify({
+    seed,
+    ok: r.ok,
+    failure: r.failure,
+    steps: r.steps,
+    coverage: r.coverage,
+    session: r.session,
+  });
   hash.update(line + "\n");
   perSeed.push(createHash("sha256").update(line).digest("hex").slice(0, 16));
 }
