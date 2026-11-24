@@ -4,8 +4,6 @@
   <a href="RULES.md">Rules</a> · <a href="PRINCIPLES.md">Principles</a> · <a href="docs/en/specification.md">Specification</a> · <a href="docs/en/slack-app.md">Slack app</a> · <a href="DECISIONS.md">Decisions</a> · <a href="README.hu.md">Magyarul</a>
 </p>
 
-**New to the research?** [Start with the approaches we tried, what failed and what we are testing next.](experiments/README.md)
-
 A Claude Code channel server that wakes a session when someone posts in a Slack channel, so no session has to poll. Each new message from an allowed sender arrives in the session that started the listener, quoted as data, with its author, `ts` and `thread_ts`.
 
 - **Gated on the sender.** Only the channel you name, and only the people and bots you list. Your own side's agent posts never wake your session, so two sides' agents can share a channel without waking themselves.
