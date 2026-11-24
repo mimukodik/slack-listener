@@ -1,0 +1,48 @@
+listener: 10000 seeds each; run-s plain 303, swarm 214
+counter                          plain     swarm  swarm/plain per run  per run-s
+duplicateEnvelopes               51584     24260                 0.47       0.67
+reorderedArrivals                 4555      4142                 0.91       1.29
+crashes                          46248     44289                 0.96       1.36
+crashesWithInflight              17414     10312                 0.59       0.84
+disconnects                      29908     40566                 1.36       1.92
+postsWhileDisconnected          381196    269691                 0.71       1.00
+threadRepliesDelivered          156265    140942                 0.90       1.28
+broadcastsDelivered              23497     21061                 0.90       1.27
+editsDelivered                   33156     21805                 0.66       0.93
+ownAgentPostsDropped            146000    121151                 0.83       1.17
+sinkFailures                    192312    102889                 0.54       0.76
+repliesFetched                  475588    244185                 0.51       0.73
+apiFailures                     156753     67426                 0.43       0.61
+retriedEnvelopes                  2190      1552                 0.71       1.00
+sleeps                           15176     10651                 0.70       0.99
+staleCatchUpReplies               7297      4558                 0.62       0.88
+injectionTexts                   73239     60829                 0.83       1.18
+sameTextEdits                    14981      8992                 0.60       0.85
+reactionsAdded                  445029    370990                 0.83       1.18
+reactionsRemoved                 92628     75279                 0.81       1.15
+reactionFaults                   42654     32192                 0.75       1.07
+doneMarks                        68532     29023                 0.42       0.60
+malformedFrames                  19404      8975                 0.46       0.65
+malformedEnvelopes               45410     21059                 0.46       0.66
+malformedAnswers                 49757     12592                 0.25       0.36
+malformedLines                   20473     11410                 0.56       0.79
+unreadableInCatchUp             142088     48749                 0.34       0.49
+repliesUnderUnreadable           18855      4190                 0.22       0.31
+hub: 2500 seeds each; run-s plain 388, swarm 254
+counter                          plain     swarm  swarm/plain per run  per run-s
+calls                           200000    200000                 1.00       1.52
+events                           49006     36230                 0.74       1.13
+crashes                           9237      4484                 0.49       0.74
+crashesInTransaction              2273      1532                 0.67       1.03
+crashesCommittedUnanswered        1570      1104                 0.70       1.07
+lapsedReclaimed                   2244       692                 0.31       0.47
+staleHolderRefused                7840      1597                 0.20       0.31
+repeatedKeys                     10996      6771                 0.62       0.94
+reusedKeys                        3335      1023                 0.31       0.47
+inputRoundTrips                   1136       191                 0.17       0.26
+wrongAnswerers                     382        65                 0.17       0.26
+notAnOption                        212        51                 0.24       0.37
+eventReads                       10721     12132                 1.13       1.72
+inboxHits                          700       234                 0.33       0.51
+sharedKeys                        2330       563                 0.24       0.37
+finals                            6197      3459                 0.56       0.85

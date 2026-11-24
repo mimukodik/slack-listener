@@ -1,0 +1,9 @@
+# Swarm testing was rejected for these two simulators
+
+Start with [the original brief](brief.md), [mutant inventory](mutants.md), and [measurement and decision](entry.md). The comparison used the same seed blocks in both arms. The listener's runs were 120 actions; hub runs were 80 steps. The campaigns had different per-seed costs, so compare detection per summed run-second within each workload. The prespecified coverage condition also failed. The first inventory includes two unreachable candidates that were replaced before the comparison. They remain recorded as coverage gaps.
+
+The baseline was 3a36ac7. [ce030f8](https://github.com/mimukodik/slack-listener/commit/ce030f8) contains the instrumentation; [81bf2fc](https://github.com/mimukodik/slack-listener/commit/81bf2fc) removes it and retains the decision. This is a recovery of an existing run.
+
+The raw directory contains gzip-compressed TSVs: seed, outcome (1 pass, 0 detected), and run milliseconds, plus the original COV and WALL records. Free-form diagnostic text is omitted. Files prefixed with m- are the campaign (including controls); the remaining tables include screening and supplementary runs. The original aggregate tables, coverage summary and campaign log accompany the per-seed data. The original tooling is under tools; its absolute paths were parameterized for publication.
+
+To regenerate the aggregate tables, copy this directory into scratch space, decompress raw/*.tsv.gz there (gzip -dk), and run tools/table.py with a block size of 2000 for listener or 500 for hub and the ordered tags printed in raw/table-listener.txt or raw/table-hub.txt. To rerun the historical mutations use a disposable checkout of ce030f8, install its locked dependencies, set SWARM_CHECKOUT to its absolute path, and run the campaign script in a scratch copy with bun, Python 3 and timeout on PATH. The mutation runner intentionally edits and restores files in that checkout. Repeated timings depend on the host.
