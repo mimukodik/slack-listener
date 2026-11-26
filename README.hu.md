@@ -4,6 +4,8 @@
   <a href="RULES.md">Szabályok</a> · <a href="PRINCIPLES.md">Elvek</a> · <a href="docs/hu/specifikacio.md">Specifikáció</a> · <a href="docs/hu/slack-app.md">Slack-app</a> · <a href="DECISIONS.md">Döntések</a> · <a href="README.md">English</a>
 </p>
 
+**Először jársz itt?** [Mit próbáltunk ki a figyelő építése közben, mi vált be, és mi nyitott még (angolul).](experiments/README.md)
+
 Claude Code channel-szerver, amely felébreszt egy munkamenetet, amikor valaki ír egy Slack-csatornába, így egyetlen munkamenetnek sem kell időzítve olvasnia. Egy engedélyezett küldő minden új üzenete abba a munkamenetbe érkezik, amelyik a figyelőt elindította, idézett adatként, a szerzőjével, a `ts`-sel és a `thread_ts`-sel.
 
 - **A küldő számít.** Csak a megadott csatorna, és csak a felsorolt emberek és botok. A saját oldal ágenseinek posztjai sosem ébresztik a saját munkamenetet, így két oldal ágensei úgy oszthatnak meg egy csatornát, hogy nem ébresztik fel önmagukat.
