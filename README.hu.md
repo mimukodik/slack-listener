@@ -14,6 +14,21 @@ Claude Code channel-szerver, amely felébreszt egy munkamenetet, amikor valaki �
 - **Csak olvas.** A szálbeli válasz az eszközön keresztül tervezett (RULES.md, 2. lépés), és ki van kapcsolva.
 - **Szimulációval ellenőrzött.** Az éles Effect program seedelt hamis külvilágon fut; az ellenőrzők a munkamenet valódi kimenetét és a Slack nyugtáit vizsgálják. A korlátos teljes bejárás minden érvényes lépéssorozat-előtagot újrajátszik.
 
+## Mi áll itt össze
+
+A figyelő szándékosan kicsi. Azt dolgozzuk ki rajta, hogyan épüljön olyan szoftver, amelyet a kódoló ágensek gyorsan módosíthatnak úgy, hogy megmarad, amire az emberek számítanak. Ezek az ötletek kapcsolódnak össze:
+
+- **Előbb a szabályok, aztán a kód.** A [RULES.md](RULES.md) a felhasználó nyelvén, számozott szabályokban mondja ki, mit kell tennie az eszköznek. Az első változata a kód előtt készült. Szabályt nem írunk át azért, hogy egy teszt átmenjen, és azonosítót nem használunk újra.
+- **Tiszta mag, I/O a szélen.** Egyetlen függvény dönt: a `step(state, event, now)` az [src/core.ts](src/core.ts) fájlban. A döntéseket a körülötte lévő héj hajtja végre.
+- **Effect a héjban.** A figyelő egyetlen [Effect](https://effect.website/) program, amely szolgáltatásokon át éri el az órát, a WebSocketet, a HTTP-t, a fájlrendszert és a munkamenetet.
+- **A teljes program determinisztikus szimulációja.** A szimulátor ugyanezt a programot futtatja hamis külvilágon, seedelt ütemezővel és virtuális órával. Ugyanaz a seed ugyanazt a futást adja, a szabályokat pedig azon ellenőrizzük, amit a munkamenet és a Slack lát. A korlátos teljes bejárás minden érvényes, legfeljebb 7 lépésből álló sorozatot is lefuttat, tizenegy lépésfajta rögzített ábécéjéből.
+- **Modellek a kód mellett.** Két [TLA+ modell](spec/listener/README.md) fedi a figyelő kézbesítési, felzárkózási és reakciójelölési szabályait. Csak a szabályok alapján készültek, és a TLC modellellenőrző adott korlátokon belül mindkét modell minden állapotát bejárja. A task hubnál, a figyelő mellé épült második eszköznél a CI [a modell útjait](spec/tasks/README.md) a valódi kódon játssza vissza. (Mindkét leírás angolul.)
+- **Egy ellenőrzést elrontott kódon bizonyítunk, mielőtt megbízunk benne.** A mérce egy ellenőrzésnél, lintszabálynál vagy tesztnél az, hogy elkapja a kód egy szándékosan elrontott változatát. A [PRINCIPLES.md](PRINCIPLES.md) megmondja, hol nem teljesül ez még.
+- **A Tiger Style az irány.** A [PRINCIPLES.md](PRINCIPLES.md) a TigerBeetle [Tiger Style-ját](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md) követi: előbb a biztonság, aztán a teljesítmény, aztán a fejlesztői élmény. Minden elvnél megmondja, mi kényszeríti ki, és hogy a kód ma megfelel-e neki.
+- **Egy akciódefiníció, minden felület.** A task hubban minden akció egyszer van definiálva, és ebből készül a REST az OpenAPI-dokumentumával, az MCP-eszközök, az RPC és a kliensoldali atomok ([src/action](src/action)).
+
+[Mit próbáltunk ki, mit tartottunk meg és mit dobtunk el (angolul)](experiments/README.md): itt van mindegyikhez a bizonyíték.
+
 ## Futtatás
 
 Bun 1.4.5 vagy újabb és az [1Password CLI](https://developer.1password.com/docs/cli/) a tokenekhez.
