@@ -14,6 +14,21 @@ A Claude Code channel server that wakes a session when someone posts in a Slack 
 - **Reads only.** Answering in a thread through the tool is planned (RULES.md, step 2) and switched off.
 - **Checked by simulation.** The production Effect program runs on a seeded fake world, with actual session output and Slack acknowledgements checked. A bounded exhaustive pass replays every valid action prefix.
 
+## What comes together here
+
+The listener is small on purpose. We use it to work out how to build software that coding agents can change quickly without breaking what people rely on, and it is meant to become a reference for building other services the same way. These ideas are combined:
+
+- **Rules before code.** [RULES.md](RULES.md) says in user terms what the tool must do, in numbered rules first written before any code. A rule is never edited to make a test pass, and an id is never reused.
+- **A pure core, I/O at the edge.** One function decides: `step(state, event, now)` in [src/core.ts](src/core.ts). The shell around it carries the decisions out.
+- **Effect in the shell.** The listener is one [Effect](https://effect.website/) program that reaches the clock, the WebSocket, HTTP, the file system and the session through services.
+- **Deterministic simulation of the whole program.** The simulator runs that same program on a fake world, with a seeded scheduler and a virtual clock. The same seed replays the same run, and the rules are checked on what the session and Slack observe. An exhaustive pass also runs every valid sequence of up to 7 actions.
+- **Models checked beside the code.** The listener's rules are also written as [TLA+ models](spec/listener/README.md), from the rules alone, and the TLC model checker explores every state within set bounds. For the task hub, a second tool built beside the listener, CI replays [the model's paths](spec/tasks/README.md) against the real code.
+- **Every check is proven on a planted bug.** A check, lint rule or test is trusted once it has caught a deliberately broken version of the code. [PRINCIPLES.md](PRINCIPLES.md) says where this is not met yet.
+- **Tiger Style as the direction.** [PRINCIPLES.md](PRINCIPLES.md) follows TigerBeetle's [Tiger Style](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md): safety first, then performance, then developer experience. For each principle it says how it is enforced and whether the code holds it today.
+- **One action definition, every surface.** In the task hub each action is defined once, and REST with its OpenAPI document, MCP tools, RPC and client atoms are generated from that definition ([src/action](src/action)).
+
+[What we tried, what we kept and what we dropped](experiments/README.md) has the evidence for each.
+
 ## Run it
 
 Bun 1.4.5 or later and the [1Password CLI](https://developer.1password.com/docs/cli/) for the tokens.
